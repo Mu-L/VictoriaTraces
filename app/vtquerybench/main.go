@@ -65,6 +65,9 @@ func benchmarkQuery(queryData [][2]string) {
 				logger.Errorf("cannot get from victoriaTraces, %s, err %s or status != 200.", queryData[i][0], err)
 			}
 			logger.Infof("vt: timestamp: %s, duration: %dns", queryData[i][0], time.Since(t1).Nanoseconds())
+			if resp != nil && resp.Body != nil {
+				resp.Body.Close()
+			}
 		}
 		wg.Done()
 	}()
@@ -77,6 +80,9 @@ func benchmarkQuery(queryData [][2]string) {
 				logger.Errorf("cannot get from victoriaTraces opt, %s, err %s or status != 200.", queryData[i][0], err)
 			}
 			logger.Infof("vt opt: timestamp: %s, duration: %dns", queryData[i][0], time.Since(t2).Nanoseconds())
+			if resp != nil && resp.Body != nil {
+				resp.Body.Close()
+			}
 		}
 		wg.Done()
 	}()
@@ -89,6 +95,9 @@ func benchmarkQuery(queryData [][2]string) {
 				logger.Errorf("cannot get from ch, %s, err %s or status != 200.", queryData[i][0], err)
 			}
 			logger.Infof("ch: timestamp: %s, duration: %dns", queryData[i][0], time.Since(t3).Nanoseconds())
+			if resp != nil && resp.Body != nil {
+				resp.Body.Close()
+			}
 		}
 		wg.Done()
 	}()
@@ -101,6 +110,9 @@ func benchmarkQuery(queryData [][2]string) {
 				logger.Errorf("cannot get from tempo, %s, err %s or status != 200.", queryData[i][0], err)
 			}
 			logger.Infof("tempo: timestamp: %s, duration: %dns", queryData[i][0], time.Since(t4).Nanoseconds())
+			if resp != nil && resp.Body != nil {
+				resp.Body.Close()
+			}
 		}
 		wg.Done()
 	}()
