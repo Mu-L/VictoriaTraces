@@ -126,7 +126,7 @@ var (
 	searchFilter = []map[string]string{
 		{
 			"service":     "checkout",
-			"tags":        `{"app.order.id":"9fed9dd1-5e60-11f0-9fd3-0242ac130015,"internal.span.format":"otlp"}`,
+			"tags":        `{"app.order.id":"9fed9dd1-5e60-11f0-9fd3-0242ac130015","internal.span.format":"otlp"}`,
 			"minDuration": "5s",
 			"maxDuration": "12s",
 			"limit":       "100",
