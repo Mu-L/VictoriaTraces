@@ -234,8 +234,8 @@ var (
 
 func benchSearch() {
 	// generate request list
-	requestList := make([]map[string]string, 0, 100*len(searchFilter))
-	for i := 0; i < 100; i++ {
+	requestList := make([]map[string]string, 0, 30*len(searchFilter))
+	for i := 0; i < 30; i++ {
 		requestList = append(requestList, searchFilter...)
 	}
 	rand.Shuffle(len(requestList), func(i, j int) {
@@ -244,8 +244,8 @@ func benchSearch() {
 
 	// generate request time range list
 	minTimestamp, maxTimestamp := 1752725963, 1752807421
-	timeRangeList := make([][2]int, 0, 100*len(searchFilter))
-	for i := 0; i < 100*len(searchFilter); i++ {
+	timeRangeList := make([][2]int, 0, 30*len(searchFilter))
+	for i := 0; i < 30*len(searchFilter); i++ {
 		startTime := minTimestamp + rand.Intn(maxTimestamp-minTimestamp)
 		endTime := startTime + 600 + rand.Intn(3600) // 10min - hour
 		timeRangeList = append(timeRangeList, [2]int{startTime * 1000000, endTime * 1000000})
