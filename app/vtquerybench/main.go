@@ -223,7 +223,7 @@ var (
 			"limit":       "100",
 		},
 		{
-			"serviceName": "product-catalog",
+			"service":     "product-catalog",
 			"tags":        `{"app.product.id":"66VCHSJNUP"}`,
 			"minDuration": "0s",
 			"maxDuration": "50ms",
