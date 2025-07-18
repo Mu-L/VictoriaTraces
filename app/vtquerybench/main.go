@@ -43,10 +43,15 @@ var (
 	clickhouseTraceEndpoint = "http://%s:16686/api/traces/%s"
 	tempoTraceEndpoint      = "http://%s:3200/api/v2/traces/%s"
 
-	victoriaTracesHost          = "35.236.177.218"
-	victoriaTracesOptimizedHost = "35.194.162.46"
-	jaegerClickHouseHost        = "34.81.255.58"
-	tempoHost                   = "104.199.134.199"
+	//victoriaTracesHost          = "35.236.177.218"
+	//victoriaTracesOptimizedHost = "35.194.162.46"
+	//jaegerClickHouseHost        = "34.81.255.58"
+	//tempoHost                   = "104.199.134.199"
+
+	victoriaTracesHost          = "10.140.15.196"
+	victoriaTracesOptimizedHost = "10.140.15.200"
+	jaegerClickHouseHost        = "10.140.15.205"
+	tempoHost                   = "10.140.15.204"
 )
 
 func benchmarkQuery(queryData [][2]string) {
