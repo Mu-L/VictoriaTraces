@@ -312,6 +312,19 @@ VictoriaTraces has very low overhead for per-tenant management, so it is OK to h
 
 VictoriaTraces doesn't perform per-tenant authorization. Use [vmauth](https://docs.victoriametrics.com/victoriametrics/vmauth/) or similar tools for per-tenant authorization.
 
+## Security
+
+It is expected that VictoriaTraces runs in a protected environment, which is unreachable from the internet without proper authorization.
+It is recommended providing access to VictoriaTraces [data ingestion APIs](https://docs.victoriametrics.com/victoriatraces/data-ingestion/)
+and [querying APIs](https://docs.victoriametrics.com/victoriatraces/querying/#http-api) via [vmauth](https://docs.victoriametrics.com/victoriametrics/vmauth/)
+or similar authorization proxies.
+
+It is recommended protecting internal HTTP endpoints from unauthorized access:
+
+- `/internal/force_flush` - via `-forceFlushAuthKey` [command-line flag](#list-of-command-line-flags).
+- `/internal/force_merge` - via `-forceMergeAuthKey` [command-line flag](#list-of-command-line-flags).
+- `/internal/partition/*` - via `-partitionManageAuthKey` [command-line flag](#list-of-command-line-flags).
+
 ## List of command-line flags
 
 ```shell
