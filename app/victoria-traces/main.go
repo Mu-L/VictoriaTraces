@@ -10,7 +10,6 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/buildinfo"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/envflag"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/flagutil"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fs"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/httpserver"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/procutil"
@@ -70,8 +69,6 @@ func main() {
 	vtinsert.Stop()
 	vtselect.Stop()
 	vtstorage.Stop()
-
-	fs.MustStopDirRemover()
 
 	logger.Infof("the VictoriaTraces has been stopped in %.3f seconds", time.Since(startTime).Seconds())
 }
