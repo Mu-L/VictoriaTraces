@@ -4,6 +4,8 @@ The following `tip` changes can be tested by building VictoriaTraces components 
 
 ## tip
 
+* FEATURE: dashboards: add dashboard for VictoriaTraces single-node and cluster. 
+
 ## [v0.1.0](https://github.com/VictoriaMetrics/VictoriaTraces/releases/tag/v0.1.0)
 
 Released at 2025-07-28
