@@ -10,6 +10,7 @@ VictoriaTraces provides the following prominent features:
 - It accepts trace spans in the popular [OpenTelemetry protocol](https://opentelemetry.io/docs/specs/otel/protocol/)(OTLP).
 - It provides [Jaeger Query Service JSON APIs](https://www.jaegertracing.io/docs/2.6/apis/#internal-http-json) 
   to integrate with [Grafana](https://grafana.com/docs/grafana/latest/datasources/jaeger/) or [Jaeger Frontend](https://www.jaegertracing.io/docs/2.6/frontend-ui/).
+- It supports alerting - see [these docs](https://docs.victoriametrics.com/victoriatraces/vmalert/).
 
 ## Operation
 
