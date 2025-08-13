@@ -31,6 +31,8 @@ In addition to VictoriaTraces server, the docker compose contains the following 
 * [HotROD](https://hub.docker.com/r/jaegertracing/example-hotrod) application to generate trace data.
 * `VictoriaMetrics single-node` to collect metrics from all the components.
 * [Grafana](#grafana) is configured with [VictoriaMetrics](https://github.com/VictoriaMetrics/victoriametrics-datasource) and Jaeger datasource pointing to VictoriaTraces server.
+* [vmalert](#vmalert) is configured to query `VictoriaTraces single-node`, and send alerts state and recording rules results to `VictoriaMetrics single-node`.
+* [alertmanager](#alertmanager) is configured to receive notifications from `vmalert`.
 
 <img alt="VictoriaTraces single-server deployment" width="500" src="assets/vt-single-server.png">
 
@@ -47,6 +49,27 @@ make docker-vt-single-down
 ```
 
 # Common components
+
+## vmalert
+
+There are two vmalert containers which responsible for evaluating alerting rules on VictoriaMetrics and VictoriaTraces.
+
+vmalert-metrics evaluates [alerting rules](https://github.com/VictoriaMetrics/VictoriaTraces/blob/master/deployment/docker/rules) on VictoriaMetrics base on metrics.
+
+vmalert-traces evaluates [alerting rules](https://github.com/VictoriaMetrics/VictoriaTraces/blob/master/deployment/docker/vtraces-example-alerts) on VictoriaTraces base on trace spans.
+
+They are connected with AlertManager for firing alerts.
+
+Web interface link:
+- vmalert-metrics: [http://localhost:8880/](http://localhost:8880/).
+- vmalert-traces: [http://localhost:8881/](http://localhost:8881/).
+
+## alertmanager
+
+AlertManager accepts notifications from `vmalert` and fires alerts.
+All notifications are blackholed according to [alertmanager.yml](https://github.com/VictoriaMetrics/VictoriaTraces/blob/master/deployment/docker/alertmanager.yml) config.
+
+Web interface link [http://localhost:9093/](http://localhost:9093/).
 
 ## Grafana
 
