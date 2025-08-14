@@ -35,7 +35,7 @@ To stop the services, run:
 make docker-vt-single-down;
 ```
 
-You can read more about docker compose and what's available there in the [Docker compose environment for VictoriaTraces](https://github.com/VictoriaMetrics/VictoriaMetrics/blob/deployment/victoriatraces/deployment/docker/README.md#victoriatraces-server).
+You can read more about docker compose and what's available there in the [Docker compose environment for VictoriaTraces](https://github.com/VictoriaMetrics/VictoriaTraces/blob/master/deployment/docker/README.md).
 
 ### How to build from sources
 
