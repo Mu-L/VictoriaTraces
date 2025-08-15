@@ -63,7 +63,7 @@ Grafana is provisioned with default dashboards and datasources.
 This environment has the following requirements:
 * installed [docker compose](https://docs.docker.com/compose/);
 * access to the Internet for downloading docker images;
-* **All commands should be executed from the root directory of [the VictoriaMetrics repo](https://github.com/VictoriaMetrics/VictoriaMetrics).**
+* **All commands should be executed from the root directory of [the VictoriaTraces repo](https://github.com/VictoriaMetrics/VictoriaTraces).**
 
 The expected output of running a command like `make docker-vm-single-up` is the following:
 ```sh
@@ -81,7 +81,7 @@ Containers are started in [--detach mode](https://docs.docker.com/reference/cli/
 As a result, you won't see their logs or exit status directly in the terminal.
 
 If something isn’t working as expected, try the following troubleshooting steps:
-1. Run from the correct directory. Make sure you're running the command from the root of the [VictoriaMetrics repository](https://github.com/VictoriaMetrics/VictoriaMetrics).
+1. Run from the correct directory. Make sure you're running the command from the root of the [VictoriaTraces repository](https://github.com/VictoriaMetrics/VictoriaTraces).
 2. Check container status. Run `docker ps -a` to list all containers and their status. Healthy and running containers should have `STATUS` set to `Up`.
 3. View container logs. To inspect logs for a specific container, get its container ID from step p2 and run: `docker logs -f <containerID>`.
 4. Read the logs carefully and follow any suggested actions.
