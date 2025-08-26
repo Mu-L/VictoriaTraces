@@ -21,12 +21,13 @@ import (
 )
 
 var (
-	retentionPeriod = flagutil.NewRetentionDuration("retentionPeriod", "7d", "Log entries with timestamps older than now-retentionPeriod are automatically deleted; "+
-		"log entries with timestamps outside the retention are also rejected during data ingestion; the minimum supported retention is 1d (one day); "+
-		"see https://docs.victoriametrics.com/victoriatraces/#retention ; see also -retention.maxDiskSpaceUsageBytes")
+	retentionPeriod = flagutil.NewRetentionDuration("retentionPeriod", "7d", "Trace spans with timestamps older than now-retentionPeriod are automatically deleted; "+
+		"trace spans with timestamps outside the retention are also rejected during data ingestion; the minimum supported retention is 1d (one day); "+
+		"see https://docs.victoriametrics.com/victoriatraces/#retention ; see also -retention.maxDiskSpaceUsageBytes and -retention.maxDiskUsagePercent")
 	maxDiskSpaceUsageBytes = flagutil.NewBytes("retention.maxDiskSpaceUsageBytes", 0, "The maximum disk space usage at -storageDataPath before older per-day "+
 		"partitions are automatically dropped; see https://docs.victoriametrics.com/victoriatraces/#retention-by-disk-space-usage ; see also -retentionPeriod")
-	futureRetention = flagutil.NewRetentionDuration("futureRetention", "2d", "Log entries with timestamps bigger than now+futureRetention are rejected during data ingestion; "+
+	maxDiskUsagePercent = flag.Int("retention.maxDiskUsagePercent", 0, "The maximum allowed disk usage percentage (1-100) for the filesystem that contains -storageDataPath before older per-day partitions are automatically dropped; mutually exclusive with -retention.maxDiskSpaceUsageBytes; see https://docs.victoriametrics.com/victoriatraces/#retention-by-disk-space-usage-percent")
+	futureRetention     = flagutil.NewRetentionDuration("futureRetention", "2d", "Log entries with timestamps bigger than now+futureRetention are rejected during data ingestion; "+
 		"see https://docs.victoriametrics.com/victoriatraces/#retention")
 	storageDataPath = flag.String("storageDataPath", "victoria-traces-data", "Path to directory where to store VictoriaTraces data; "+
 		"see https://docs.victoriametrics.com/victoriatraces/#storage")
@@ -36,7 +37,7 @@ var (
 		"Smaller intervals increase disk IO load. Minimum supported value is 1s")
 	logNewStreams = flag.Bool("logNewStreams", false, "Whether to log creation of new streams; this can be useful for debugging of high cardinality issues with log streams; "+
 		"see https://docs.victoriametrics.com/victoriatraces/keyconcepts/#stream-fields ; see also -logIngestedRows")
-	logIngestedRows = flag.Bool("logIngestedRows", false, "Whether to log all the ingested log entries; this can be useful for debugging of data ingestion; "+
+	logIngestedRows = flag.Bool("logIngestedRows", false, "Whether to log all the ingested trace spans; this can be useful for debugging of data ingestion; "+
 		"see https://docs.victoriametrics.com/victoriatraces/data-ingestion/ ; see also -logNewStreams")
 	minFreeDiskSpaceBytes = flagutil.NewBytes("storage.minFreeDiskSpaceBytes", 10e6, "The minimum free disk space at -storageDataPath after which "+
 		"the storage stops accepting new data")
@@ -46,8 +47,11 @@ var (
 	forceFlushAuthKey = flagutil.NewPassword("forceFlushAuthKey", "authKey, which must be passed in query string to /internal/force_flush . It overrides -httpAuth.* . "+
 		"See https://docs.victoriametrics.com/victoriatraces/#forced-flush")
 
-	storageNodeAddrs = flagutil.NewArrayString("storageNode", "Comma-separated list of TCP addresses for storage nodes to route the ingested logs to and to send select queries to. "+
-		"If the list is empty, then the ingested logs are stored and queried locally from -storageDataPath")
+	partitionManageAuthKey = flagutil.NewPassword("partitionManageAuthKey", "authKey, which must be passed in query string to /internal/partition/* . It overrides -httpAuth.* . "+
+		"See https://docs.victoriametrics.com/victoriatraces/#partitions-lifecycle")
+
+	storageNodeAddrs = flagutil.NewArrayString("storageNode", "Comma-separated list of TCP addresses for storage nodes to route the ingested spans to and to send select queries to. "+
+		"If the list is empty, then the ingested spans are stored and queried locally from -storageDataPath")
 	insertConcurrency        = flag.Int("insert.concurrency", 2, "The average number of concurrent data ingestion requests, which can be sent to every -storageNode")
 	insertDisableCompression = flag.Bool("insert.disableCompression", false, "Whether to disable compression when sending the ingested data to -storageNode nodes. "+
 		"Disabled compression reduces CPU usage at the cost of higher network usage")
@@ -78,6 +82,7 @@ var localStorage *logstorage.Storage
 var localStorageMetrics *metrics.Set
 
 var netstorageInsert *netinsert.Storage
+
 var netstorageSelect *netselect.Storage
 
 // Init initializes vtstorage.
@@ -99,9 +104,17 @@ func initLocalStorage() {
 	if retentionPeriod.Duration() < 24*time.Hour {
 		logger.Fatalf("-retentionPeriod cannot be smaller than a day; got %s", retentionPeriod)
 	}
+	// Validate mutually exclusive retention flags and their values
+	if maxDiskSpaceUsageBytes.N > 0 && *maxDiskUsagePercent > 0 {
+		logger.Fatalf("-retention.maxDiskSpaceUsageBytes and -retention.maxDiskUsagePercent cannot be set simultaneously")
+	}
+	if *maxDiskUsagePercent < 0 || *maxDiskUsagePercent > 100 {
+		logger.Fatalf("-retention.maxDiskUsagePercent must be between 1 and 100; got %d", *maxDiskUsagePercent)
+	}
 	cfg := &logstorage.StorageConfig{
 		Retention:              retentionPeriod.Duration(),
 		MaxDiskSpaceUsageBytes: maxDiskSpaceUsageBytes.N,
+		MaxDiskUsagePercent:    *maxDiskUsagePercent,
 		FlushInterval:          *inmemoryDataFlushInterval,
 		FutureRetention:        futureRetention.Duration(),
 		LogNewStreams:          *logNewStreams,
@@ -211,6 +224,10 @@ func RequestHandler(w http.ResponseWriter, r *http.Request) bool {
 		return processForceMerge(w, r)
 	case "/internal/force_flush":
 		return processForceFlush(w, r)
+	case "/internal/partition/attach":
+		return processPartitionAttach(w, r)
+	case "/internal/partition/detach":
+		return processPartitionDetach(w, r)
 	}
 	return false
 }
@@ -253,6 +270,44 @@ func processForceFlush(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
+func processPartitionAttach(w http.ResponseWriter, r *http.Request) bool {
+	if localStorage == nil {
+		// There are no partitions in non-local storage
+		return false
+	}
+
+	if !httpserver.CheckAuthFlag(w, r, partitionManageAuthKey) {
+		return true
+	}
+
+	name := r.FormValue("name")
+	if err := localStorage.PartitionAttach(name); err != nil {
+		httpserver.Errorf(w, r, "%s", err)
+		return true
+	}
+
+	return true
+}
+
+func processPartitionDetach(w http.ResponseWriter, r *http.Request) bool {
+	if localStorage == nil {
+		// There are no partitions in non-local storage
+		return false
+	}
+
+	if !httpserver.CheckAuthFlag(w, r, partitionManageAuthKey) {
+		return true
+	}
+
+	name := r.FormValue("name")
+	if err := localStorage.PartitionDetach(name); err != nil {
+		httpserver.Errorf(w, r, "%s", err)
+		return true
+	}
+
+	return true
+}
+
 // Storage implements insertutil.LogRowsStorage interface
 type Storage struct{}
 
@@ -288,6 +343,11 @@ func (*Storage) MustAddRows(lr *logstorage.LogRows) {
 
 // RunQuery runs the given q and calls writeBlock for the returned data blocks
 func RunQuery(ctx context.Context, tenantIDs []logstorage.TenantID, q *logstorage.Query, writeBlock logstorage.WriteDataBlockFunc) error {
+	qOpt, limit := q.GetLastNResultsQuery()
+	if qOpt != nil {
+		return runOptimizedLastNResultsQuery(ctx, tenantIDs, qOpt, limit, writeBlock)
+	}
+
 	if localStorage != nil {
 		return localStorage.RunQuery(ctx, tenantIDs, q, writeBlock)
 	}
@@ -354,10 +414,9 @@ func writeStorageMetrics(w io.Writer, strg *logstorage.Storage) {
 	var ss logstorage.StorageStats
 	strg.UpdateStats(&ss)
 
-	if maxDiskSpaceUsageBytes.N > 0 {
-		metrics.WriteGaugeUint64(w, fmt.Sprintf(`vt_max_disk_space_usage_bytes{path=%q}`, *storageDataPath), uint64(maxDiskSpaceUsageBytes.N))
+	if ss.MaxDiskSpaceUsageBytes > 0 {
+		metrics.WriteGaugeUint64(w, fmt.Sprintf(`vt_max_disk_space_usage_bytes{path=%q}`, *storageDataPath), uint64(ss.MaxDiskSpaceUsageBytes))
 	}
-
 	metrics.WriteGaugeUint64(w, fmt.Sprintf(`vt_free_disk_space_bytes{path=%q}`, *storageDataPath), fs.MustGetFreeSpace(*storageDataPath))
 
 	isReadOnly := uint64(0)
@@ -366,13 +425,23 @@ func writeStorageMetrics(w io.Writer, strg *logstorage.Storage) {
 	}
 	metrics.WriteGaugeUint64(w, fmt.Sprintf(`vt_storage_is_read_only{path=%q}`, *storageDataPath), isReadOnly)
 
-	metrics.WriteGaugeUint64(w, `vt_active_merges{type="storage/inmemory"}`, ss.InmemoryActiveMerges)
-	metrics.WriteGaugeUint64(w, `vt_active_merges{type="storage/small"}`, ss.SmallPartActiveMerges)
-	metrics.WriteGaugeUint64(w, `vt_active_merges{type="storage/big"}`, ss.BigPartActiveMerges)
+	metrics.WriteGaugeUint64(w, `vt_active_merges{type="storage/inmemory"}`, ss.ActiveInmemoryMerges)
+	metrics.WriteGaugeUint64(w, `vt_active_merges{type="storage/small"}`, ss.ActiveSmallMerges)
+	metrics.WriteGaugeUint64(w, `vt_active_merges{type="storage/big"}`, ss.ActiveBigMerges)
+	metrics.WriteGaugeUint64(w, `vt_active_merges{type="indexdb/inmemory"}`, ss.IndexdbActiveInmemoryMerges)
+	metrics.WriteGaugeUint64(w, `vt_active_merges{type="indexdb/file"}`, ss.IndexdbActiveFileMerges)
 
-	metrics.WriteCounterUint64(w, `vt_merges_total{type="storage/inmemory"}`, ss.InmemoryMergesTotal)
-	metrics.WriteCounterUint64(w, `vt_merges_total{type="storage/small"}`, ss.SmallPartMergesTotal)
-	metrics.WriteCounterUint64(w, `vt_merges_total{type="storage/big"}`, ss.BigPartMergesTotal)
+	metrics.WriteCounterUint64(w, `vt_merges_total{type="storage/inmemory"}`, ss.InmemoryMergesCount)
+	metrics.WriteCounterUint64(w, `vt_merges_total{type="storage/small"}`, ss.SmallMergesCount)
+	metrics.WriteCounterUint64(w, `vt_merges_total{type="storage/big"}`, ss.BigMergesCount)
+	metrics.WriteCounterUint64(w, `vt_merges_total{type="indexdb/inmemory"}`, ss.IndexdbInmemoryMergesCount)
+	metrics.WriteCounterUint64(w, `vt_merges_total{type="indexdb/file"}`, ss.IndexdbFileMergesCount)
+
+	metrics.WriteCounterUint64(w, `vt_rows_merged_total{type="storage/inmemory"}`, ss.InmemoryRowsMerged)
+	metrics.WriteCounterUint64(w, `vt_rows_merged_total{type="storage/small"}`, ss.SmallRowsMerged)
+	metrics.WriteCounterUint64(w, `vt_rows_merged_total{type="storage/big"}`, ss.BigRowsMerged)
+	metrics.WriteCounterUint64(w, `vt_rows_merged_total{type="indexdb/inmemory"}`, ss.IndexdbInmemoryItemsMerged)
+	metrics.WriteCounterUint64(w, `vt_rows_merged_total{type="indexdb/file"}`, ss.IndexdbFileItemsMerged)
 
 	metrics.WriteGaugeUint64(w, `vt_storage_rows{type="storage/inmemory"}`, ss.InmemoryRowsCount)
 	metrics.WriteGaugeUint64(w, `vt_storage_rows{type="storage/small"}`, ss.SmallPartRowsCount)
@@ -385,6 +454,9 @@ func writeStorageMetrics(w io.Writer, strg *logstorage.Storage) {
 	metrics.WriteGaugeUint64(w, `vt_storage_blocks{type="storage/inmemory"}`, ss.InmemoryBlocks)
 	metrics.WriteGaugeUint64(w, `vt_storage_blocks{type="storage/small"}`, ss.SmallPartBlocks)
 	metrics.WriteGaugeUint64(w, `vt_storage_blocks{type="storage/big"}`, ss.BigPartBlocks)
+
+	metrics.WriteGaugeUint64(w, `vt_pending_rows{type="storage"}`, ss.PendingRows)
+	metrics.WriteGaugeUint64(w, `vt_pending_rows{type="indexdb"}`, ss.IndexdbPendingItems)
 
 	metrics.WriteGaugeUint64(w, `vt_partitions`, ss.PartitionsCount)
 	metrics.WriteCounterUint64(w, `vt_streams_created_total`, ss.StreamsCreatedTotal)

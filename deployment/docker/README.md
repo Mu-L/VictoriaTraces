@@ -31,6 +31,8 @@ In addition to VictoriaTraces server, the docker compose contains the following 
 * [HotROD](https://hub.docker.com/r/jaegertracing/example-hotrod) application to generate trace data.
 * `VictoriaMetrics single-node` to collect metrics from all the components.
 * [Grafana](#grafana) is configured with [VictoriaMetrics](https://github.com/VictoriaMetrics/victoriametrics-datasource) and Jaeger datasource pointing to VictoriaTraces server.
+* [vmalert](#vmalert) is configured to query `VictoriaTraces single-node`, and send alerts state and recording rules results to `VictoriaMetrics single-node`.
+* [alertmanager](#alertmanager) is configured to receive notifications from `vmalert`.
 
 <img alt="VictoriaTraces single-server deployment" width="500" src="assets/vt-single-server.png">
 
@@ -48,6 +50,27 @@ make docker-vt-single-down
 
 # Common components
 
+## vmalert
+
+There are two vmalert containers which responsible for evaluating alerting rules on VictoriaMetrics and VictoriaTraces.
+
+vmalert-metrics evaluates [alerting rules](https://github.com/VictoriaMetrics/VictoriaTraces/blob/master/deployment/docker/rules) on VictoriaMetrics base on metrics.
+
+vmalert-traces evaluates [alerting rules](https://github.com/VictoriaMetrics/VictoriaTraces/blob/master/deployment/docker/vtraces-example-alerts) on VictoriaTraces base on trace spans.
+
+They are connected with AlertManager for firing alerts.
+
+Web interface link:
+- vmalert-metrics: [http://localhost:8880/](http://localhost:8880/).
+- vmalert-traces: [http://localhost:8881/](http://localhost:8881/).
+
+## alertmanager
+
+AlertManager accepts notifications from `vmalert` and fires alerts.
+All notifications are blackholed according to [alertmanager.yml](https://github.com/VictoriaMetrics/VictoriaTraces/blob/master/deployment/docker/alertmanager.yml) config.
+
+Web interface link [http://localhost:9093/](http://localhost:9093/).
+
 ## Grafana
 
 Web interface link [http://localhost:3000](http://localhost:3000).
@@ -63,7 +86,7 @@ Grafana is provisioned with default dashboards and datasources.
 This environment has the following requirements:
 * installed [docker compose](https://docs.docker.com/compose/);
 * access to the Internet for downloading docker images;
-* **All commands should be executed from the root directory of [the VictoriaMetrics repo](https://github.com/VictoriaMetrics/VictoriaMetrics).**
+* **All commands should be executed from the root directory of [the VictoriaTraces repo](https://github.com/VictoriaMetrics/VictoriaTraces).**
 
 The expected output of running a command like `make docker-vm-single-up` is the following:
 ```sh
@@ -81,7 +104,7 @@ Containers are started in [--detach mode](https://docs.docker.com/reference/cli/
 As a result, you won't see their logs or exit status directly in the terminal.
 
 If something isn’t working as expected, try the following troubleshooting steps:
-1. Run from the correct directory. Make sure you're running the command from the root of the [VictoriaMetrics repository](https://github.com/VictoriaMetrics/VictoriaMetrics).
+1. Run from the correct directory. Make sure you're running the command from the root of the [VictoriaTraces repository](https://github.com/VictoriaMetrics/VictoriaTraces).
 2. Check container status. Run `docker ps -a` to list all containers and their status. Healthy and running containers should have `STATUS` set to `Up`.
 3. View container logs. To inspect logs for a specific container, get its container ID from step p2 and run: `docker logs -f <containerID>`.
 4. Read the logs carefully and follow any suggested actions.

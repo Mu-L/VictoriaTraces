@@ -1,5 +1,14 @@
+---
+build:
+  list: never
+  publishResources: false
+  render: never
+sitemap:
+  disable: true
+---
+
 VictoriaTraces is an open-source, user-friendly database designed for storing and querying distributed [tracing data](https://en.wikipedia.org/wiki/Tracing_(software)), 
-built by the [VictoriaMetrics](https://github.com/VictoriaMetrics/VictoriaMetrics) team.
+built by the [VictoriaMetrics](https://github.com/VictoriaMetrics) team.
 
 ## Prominent features
 
