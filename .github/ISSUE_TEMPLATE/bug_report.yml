@@ -37,7 +37,7 @@ body:
         The line returned when passing `--version` command line flag to the binary. For example:
         ```
         $ ./victoria-traces-prod --version
-        victoria-traces-v1.24.0
+        victoria-traces-v0.1.0
         ```
     validations:
       required: true
