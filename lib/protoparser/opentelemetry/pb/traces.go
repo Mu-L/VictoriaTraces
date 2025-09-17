@@ -90,6 +90,18 @@ func (r *ExportTraceServiceRequest) UnmarshalJSONCustom(src []byte) (err error) 
 	return nil
 }
 
+// ExportTraceServiceResponse represent the OTLP response protobuf message
+// unused.
+type ExportTraceServiceResponse struct {
+	PartialSuccess *ExportTracePartialSuccess `json:"partialSuccess"`
+}
+
+// ExportTracePartialSuccess unused.
+type ExportTracePartialSuccess struct {
+	RejectedSpans int64  `json:"rejectedSpans"`
+	ErrorMessage  string `json:"errorMessage"`
+}
+
 // ResourceSpans represent a collection of ScopeSpans from a Resource.
 //
 // https://github.com/open-telemetry/opentelemetry-proto/blob/v1.5.0/opentelemetry/proto/trace/v1/trace.proto#L48

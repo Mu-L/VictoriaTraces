@@ -4,9 +4,5 @@ plugins:
     out: ./
     opt:
       - paths=source_relative
-  - remote: buf.build/protocolbuffers/go
-    out: ./
-    opt:
-      - paths=source_relative
 inputs:
   - directory: ./

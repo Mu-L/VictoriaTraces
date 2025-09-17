@@ -15,14 +15,29 @@ import (
 var (
 	disableInsert   = flag.Bool("insert.disable", false, "Whether to disable /insert/* HTTP endpoints")
 	disableInternal = flag.Bool("internalinsert.disable", false, "Whether to disable /internal/insert HTTP endpoint. See https://docs.victoriametrics.com/victoriatraces/cluster/#security")
+
+	otlpGRPCListenAddr = flag.String("otlpGRPCListenAddr", "", "TCP address to serve as OTLP gRPC server. "+
+		"Usually :4317 must be set. Doesn't work if empty. See also -otlpGRPCListenAddr.useProxyProtocol")
+	otlpGRPCUseProxyProtocol = flag.Bool("otlpGRPCListenAddr.useProxyProtocol", false, "Whether to use proxy protocol for connections accepted at -otlpGRPCListenAddr . "+
+		"See https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt")
+)
+
+var (
+	otlpGrpcServer *opentelemetry.OTLPGrpcServer
 )
 
 // Init initializes vtinsert
 func Init() {
+	if len(*otlpGRPCListenAddr) > 0 {
+		otlpGrpcServer = opentelemetry.MustStart(*otlpGRPCListenAddr, *otlpGRPCUseProxyProtocol)
+	}
 }
 
 // Stop stops vtinsert
 func Stop() {
+	if len(*otlpGRPCListenAddr) > 0 {
+		otlpGrpcServer.MustStop()
+	}
 }
 
 // RequestHandler handles insert requests for VictoriaLogs
