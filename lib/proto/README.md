@@ -1,0 +1,52 @@
+`lib/proto` contains all the (OpenTelemetry proto) files, documentation, and commands to help generate `.go` files from the proto files.
+
+## Folder structure
+
+To make it easier to sync with the [`opentelemetry-proto`](https://github.com/open-telemetry/opentelemetry-proto/tree/v1.8.0/opentelemetry/proto) repository,
+`lib/proto` contains the same folder structure as `opentelemetry-proto`:
+
+```shell
+└── lib
+    └── proto
+        └── opentelemetry
+            └── proto
+                ├── collector
+                │   └── trace
+                │       └── v1
+                ├── common
+                │   └── v1
+                ├── resource
+                │   └── v1
+                └── trace
+                    └── v1
+```
+
+## Updating proto files
+
+When updating the proto files, simply copy and paste the `opentelemetry` folder from the [upstream](https://github.com/open-telemetry/opentelemetry-proto) to `lib/proto`,
+and remove unnecessary signal folders (such as `metrics/v1`, `profiles/v1development`, `collector/metrics/v1`, and more).
+
+To handle the `go import` path correctly, replace the following line prefix in `.proto` files:
+```protobuf
+option go_package = "go.opentelemetry.io/proto/otlp/
+```
+to
+```protobuf
+option go_package = "github.com/VictoriaMetrics/VictoriaTraces/lib/proto/opentelemetry/proto/
+```
+
+## Compiling
+Run the following command from the VictoriaTraces repository's root folder:
+```make
+make gen-otel-proto
+```
+
+It will run [buf](https://github.com/bufbuild/buf) with docker, compile and output the `.go` files to the same folder of your `.proto` files.
+
+The `buf` command sends request to remote server and has [rate limiting](https://buf.build/docs/bsr/rate-limits/#code-generation). To increase the rate limit,
+you may need to register on [buf.build]() and authenticate locally using an environment variable or CLI. See [this doc](https://buf.build/docs/bsr/authentication/#authenticating-locally) for details.
+
+```Makefile
+gen-otel-proto:
+    $(DOCKER_RUN) -e BUF_TOKEN={YOUR_BUF_TOKEN} --volume "$(shell pwd)/lib/proto:/workspace" --workdir /workspace bufbuild/buf generate
+```

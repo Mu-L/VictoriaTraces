@@ -24,6 +24,7 @@ include docs/Makefile
 include deployment/*/Makefile
 include dashboards/Makefile
 include package/release/Makefile
+include lib/proto/Makefile
 
 all: \
 	victoria-traces-prod
