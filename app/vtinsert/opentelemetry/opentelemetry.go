@@ -161,14 +161,14 @@ func handleJSONRequest(r *http.Request, w http.ResponseWriter) {
 	requestJSONDuration.UpdateDuration(startTime)
 }
 
-func GrpcRequestHandler(r *http.Request, w http.ResponseWriter) {
+func GrpcExportHandler(r *http.Request, w http.ResponseWriter) {
 	if r.URL.Path != OLTPExportTracesGrpcPath {
 		httpserver.Errorf(w, r, "failed to process grpc request:%s", &httpserver.ErrorWithStatusCode{Err: fmt.Errorf("grpc method not found: %s", r.URL.Path), StatusCode: http.StatusNotFound})
 		return
 	}
 	cp, err := insertutil.GetCommonParams(r)
 	if err != nil {
-		httpserver.Errorf(w, r, "cannot parse common params from request: %s", err)
+		writeErrorGrpcResponse(w, GrpcInternal, fmt.Sprintf("cannot parse common params from request: %s", err))
 		return
 	}
 	// stream fields must contain the service name and span name.
@@ -177,13 +177,13 @@ func GrpcRequestHandler(r *http.Request, w http.ResponseWriter) {
 	cp.StreamFields = append(mandatoryStreamFields, cp.StreamFields...)
 
 	if err = insertutil.CanWriteData(); err != nil {
-		httpserver.Errorf(w, r, "%s", err)
+		writeErrorGrpcResponse(w, GrpcInternal, err.Error())
 		return
 	}
 
 	protobufData, err := getProtobufData(r)
 	if err != nil {
-		httpserver.Errorf(w, r, "failed to get protobuf data from request, error: %s", err)
+		writeErrorGrpcResponse(w, GrpcInvalidArgument, fmt.Sprintf("failed to get protobuf data from request, error: %s", err))
 		return
 	}
 	encoding := r.Header.Get("grpc-encoding")
@@ -203,11 +203,11 @@ func GrpcRequestHandler(r *http.Request, w http.ResponseWriter) {
 	})
 
 	if err != nil {
-		httpserver.Errorf(w, r, "cannot read OpenTelemetry protocol data: %s", err)
+		writeErrorGrpcResponse(w, GrpcInternal, fmt.Sprintf("cannot read OpenTelemetry protocol data: %s", err))
 		return
 	}
 
-	writeExportTraceResponses(w, 0, "")
+	writeExportTracesGrpcResponse(w, 0, "")
 	return
 }
 

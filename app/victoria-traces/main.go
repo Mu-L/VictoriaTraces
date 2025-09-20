@@ -123,7 +123,7 @@ func httpRequestHandler(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func http2RequestHandler(w http.ResponseWriter, r *http.Request) {
-	vtinsert.GrpcInsertHandler(w, r)
+	vtinsert.GrpcExportHandler(w, r)
 }
 
 func usage() {

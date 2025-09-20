@@ -10,10 +10,31 @@ import (
 	"net/http"
 )
 
+// https://grpc.github.io/grpc/core/md_doc_statuscodes.html
+const (
+	GrpcOk                 = "0"
+	GrpcCancelled          = "1"
+	GrpcUnknown            = "2"
+	GrpcInvalidArgument    = "3"
+	GrpcDeadlineExceeded   = "4"
+	GrpcNotFound           = "5"
+	GrpcAlreadyExist       = "6"
+	GrpcPermissionDenied   = "7"
+	GrpcResourceExhausted  = "8"
+	GrpcFailedPrecondition = "9"
+	GrpcAbort              = "10"
+	GrpcOutOfRange         = "11"
+	GrpcUnimplemented      = "12"
+	GrpcInternal           = "13"
+	GrpcUnavailable        = "14"
+	GrpcDataLoss           = "15"
+	GrpcUnauthenticated    = "16"
+)
+
 func getProtobufData(r *http.Request) ([]byte, error) {
 	reqBody, err := io.ReadAll(r.Body)
 	if err != nil {
-		return nil, &httpserver.ErrorWithStatusCode{StatusCode: http.StatusBadRequest, Err: fmt.Errorf("cannot read request body: %s", err)}
+		return nil, &httpserver.ErrorWithStatusCode{StatusCode: http.StatusInternalServerError, Err: fmt.Errorf("cannot read request body: %s", err)}
 	}
 	// +--------+-------------------------------------------------+
 	// | 1 byte |                    4 bytes                      |
@@ -26,6 +47,7 @@ func getProtobufData(r *http.Request) ([]byte, error) {
 	// |                 (variable length)                        |
 	// |                                                          |
 	// +----------------------------------------------------------+
+	// See https://grpc.github.io/grpc/core/md_doc__p_r_o_t_o_c_o_l-_h_t_t_p2.html
 	if len(reqBody) < 5 {
 		return nil, &httpserver.ErrorWithStatusCode{StatusCode: http.StatusBadRequest, Err: fmt.Errorf("invalid grpc header length: %d", len(reqBody))}
 	}
@@ -40,8 +62,15 @@ func getProtobufData(r *http.Request) ([]byte, error) {
 	return reqBody[5:], nil
 }
 
+func writeErrorGrpcResponse(w http.ResponseWriter, grpcErrorCode, grpcErrorMessage string) {
+	w.Header().Set("Content-Type", "application/grpc+proto")
+	w.Header().Set("Trailer", "grpc-status, grpc-message")
+	w.Header().Set("Grpc-Status", grpcErrorCode)
+	w.Header().Set("Grpc-Message", grpcErrorMessage)
+}
+
 // https://github.com/grpc/grpc/blob/master/doc/PROTOCOL-HTTP2.md#message-encoding
-func writeExportTraceResponses(w http.ResponseWriter, rejectedSpans int64, errorMessage string) {
+func writeExportTracesGrpcResponse(w http.ResponseWriter, rejectedSpans int64, errorMessage string) {
 	resp := pb.ExportTraceServiceResponse{
 		ExportTracePartialSuccess: pb.ExportTracePartialSuccess{
 			RejectedSpans: rejectedSpans,
@@ -49,8 +78,11 @@ func writeExportTraceResponses(w http.ResponseWriter, rejectedSpans int64, error
 		},
 	}
 	respData := resp.MarshalProtobuf(nil)
+
 	grpcRespData := make([]byte, 5+len(respData))
+	// Compressed flag
 	grpcRespData[0] = 0
+	// Message Length
 	binary.BigEndian.PutUint32(grpcRespData[1:5], uint32(len(respData)))
 	copy(grpcRespData[5:], respData)
 	w.Header().Set("Content-Type", "application/grpc+proto")
@@ -61,12 +93,14 @@ func writeExportTraceResponses(w http.ResponseWriter, rejectedSpans int64, error
 		logger.Errorf("unexpected write of %d bytes in replying OLTP export grpc request, expected:%d", writtenLen, len(grpcRespData))
 		return
 	}
+	grpcStatus := GrpcOk
+
 	if err != nil {
-		logger.Errorf("failed to reply OLTP export grpc request , error:%s", err)
-		return
+		grpcStatus = GrpcInternal
+		grpcErrorMessage := fmt.Sprintf("failed to reply OLTP export grpc request , error:%s", err)
+		logger.Errorf(grpcErrorMessage)
+		w.Header().Set("Grpc-Message", grpcErrorMessage)
 	}
 
-	w.Header().Set("Grpc-Status", "0")
-	w.Header().Set("Grpc-Message", "")
-
+	w.Header().Set("Grpc-Status", grpcStatus)
 }
