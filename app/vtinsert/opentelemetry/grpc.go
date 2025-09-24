@@ -31,23 +31,23 @@ const (
 	GrpcUnauthenticated    = "16"
 )
 
+// +------------+---------------------------------------------+
+// |   1 byte   |                 4 bytes                     |
+// +------------+---------------------------------------------+
+// | Compressed |               Message Length                |
+// |   Flag     |                 (uint32)                    |
+// +------------+---------------------------------------------+
+// |                                                          |
+// |                   Message Data                           |
+// |                 (variable length)                        |
+// |                                                          |
+// +----------------------------------------------------------+
+// See https://grpc.github.io/grpc/core/md_doc__p_r_o_t_o_c_o_l-_h_t_t_p2.html
 func getProtobufData(r *http.Request) ([]byte, error) {
 	reqBody, err := io.ReadAll(r.Body)
 	if err != nil {
 		return nil, &httpserver.ErrorWithStatusCode{StatusCode: http.StatusInternalServerError, Err: fmt.Errorf("cannot read request body: %s", err)}
 	}
-	// +--------+-------------------------------------------------+
-	// | 1 byte |                    4 bytes                      |
-	// +--------+-------------------------------------------------+
-	// | Compressed |               Message Length                |
-	// |   Flag     |                 (uint32)                    |
-	// +------------+---------------------------------------------+
-	// |                                                          |
-	// |                   Message Data                           |
-	// |                 (variable length)                        |
-	// |                                                          |
-	// +----------------------------------------------------------+
-	// See https://grpc.github.io/grpc/core/md_doc__p_r_o_t_o_c_o_l-_h_t_t_p2.html
 	if len(reqBody) < 5 {
 		return nil, &httpserver.ErrorWithStatusCode{StatusCode: http.StatusBadRequest, Err: fmt.Errorf("invalid grpc header length: %d", len(reqBody))}
 	}

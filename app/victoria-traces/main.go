@@ -98,7 +98,7 @@ func httpRequestHandler(w http.ResponseWriter, r *http.Request) bool {
 		w.Header().Add("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprintf(w, "<h2>Single-node VictoriaTraces</h2></br>")
 		fmt.Fprintf(w, "Version %s<br>", buildinfo.Version)
-		fmt.Fprintf(w, "See docs at <a href=' '>https://docs.victoriametrics.com/victoriatraces/</a ></br>")
+		fmt.Fprintf(w, "See docs at <a href='https://docs.victoriametrics.com/victoriatraces/'>https://docs.victoriametrics.com/victoriatraces/</a></br>")
 		fmt.Fprintf(w, "Useful endpoints:</br>")
 		httpserver.WriteAPIHelp(w, [][2]string{
 			{"select/vmui", "Web UI for VictoriaTraces"},
