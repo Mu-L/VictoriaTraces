@@ -92,6 +92,7 @@ It allows users to visualize trace data on Grafana, by simply adding a [Jaeger d
 ```
 http://<victoria-traces>:10428/select/jaeger
 ```
+See more details about the HTTP APIs and params VictoriaTraces supports and how to query data from them [in this doc](https://docs.victoriametrics.com/victoriatraces/querying/).
 
 ### gRPC endpoint
 VictoriaTraces provides gRPC endpoint for OpenTelemetry trace ingestion. The endpoint won't start by default unless you enable it by specify `-grpcListenAddr`
