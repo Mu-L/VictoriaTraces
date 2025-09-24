@@ -93,13 +93,21 @@ It allows users to visualize trace data on Grafana, by simply adding a [Jaeger d
 http://<victoria-traces>:10428/select/jaeger
 ```
 
-See more details about the HTTP APIs and params VictoriaTraces supports and how to query data from them [in this doc](https://docs.victoriametrics.com/victoriatraces/querying/).
+### gRPC endpoint
+VictoriaTraces provides gRPC endpoint for OpenTelemetry trace ingestion. The endpoint won't start by default unless you enable it by specify `-grpcListenAddr`
+```sh
+./victoria-traces-prod -grpcListenAddr=":4317"
+```
+
+Then VictoriaTraces will start gRPC service at port `4317`.
+
+See more details about the gRPC APIs and how to ingest data through it [in this doc](https://docs.victoriametrics.com/victoriatraces/data-ingestion/).
 
 ### Alerting
 
 see [these docs](https://docs.victoriametrics.com/victoriatraces/vmalert/).
 
-## Monitoring
+### Monitoring
 
 VictoriaTraces exposes internal metrics in Prometheus exposition format at `http://localhost:10428/metrics` page.
 It is recommended to set up monitoring of these metrics via VictoriaMetrics

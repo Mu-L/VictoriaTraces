@@ -71,13 +71,18 @@ func writeErrorGrpcResponse(w http.ResponseWriter, grpcErrorCode, grpcErrorMessa
 
 // https://github.com/grpc/grpc/blob/master/doc/PROTOCOL-HTTP2.md#message-encoding
 func writeExportTracesGrpcResponse(w http.ResponseWriter, rejectedSpans int64, errorMessage string) {
-	resp := pb.ExportTraceServiceResponse{
-		ExportTracePartialSuccess: pb.ExportTracePartialSuccess{
-			RejectedSpans: rejectedSpans,
-			ErrorMessage:  errorMessage,
-		},
+	var respData []byte
+	// The server MUST leave the partial_success field unset in case of a successful response.
+	// https://opentelemetry.io/docs/specs/otlp/#full-success
+	if rejectedSpans != 0 || errorMessage == "" {
+		resp := pb.ExportTraceServiceResponse{
+			ExportTracePartialSuccess: pb.ExportTracePartialSuccess{
+				RejectedSpans: rejectedSpans,
+				ErrorMessage:  errorMessage,
+			},
+		}
+		respData = resp.MarshalProtobuf(nil)
 	}
-	respData := resp.MarshalProtobuf(nil)
 
 	grpcRespData := make([]byte, 5+len(respData))
 	// Compressed flag

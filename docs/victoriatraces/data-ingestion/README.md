@@ -7,7 +7,7 @@ sitemap:
   disable: true
 ---
 
-[VictoriaTraces](https://docs.victoriametrics.com/victoriatraces/) can accept trace spans via [the OpenTelemetry protocol (OTLP)](https://opentelemetry.io/docs/specs/otlp/).
+[VictoriaTraces](https://docs.victoriametrics.com/victoriatraces/) can accept trace spans via [the OpenTelemetry protocol (OTLP)](https://opentelemetry.io/docs/specs/otlp/), and support both HTTP and gRPC endpoints.
 
 ## HTTP APIs
 
@@ -55,3 +55,13 @@ additionally to [HTTP query args](#http-query-string-parameters):
   the ingested data is logged by VictoriaTraces, so it can be investigated later.
 
 See also [HTTP Query string parameters](#http-query-string-parameters).
+
+## gRPC APIs
+Currently, VictoriaTraces grpc endpoint doesn't support TLS yet, so you need to disable it client. See more details [in this docs](https://docs.victoriametrics.com/victoriatraces/data-ingestion/opentelemetry/).
+
+### Opentelemetry API
+
+VictoriaTraces provides the following gRPC function for OpenTelemetry data ingestion:
+- `TraceService.Export` defined in [here](https://github.com/open-telemetry/opentelemetry-proto/blob/main/opentelemetry/proto/collector/trace/v1/trace_service.proto)
+
+gRPC is running over HTTP2, so it also accepts optional HTTP parameters via [HTTP headers in HTTP endpoint](https://docs.victoriametrics.com/victoriatraces/data-ingestion/#http-headers)

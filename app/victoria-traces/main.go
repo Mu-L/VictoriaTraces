@@ -29,7 +29,7 @@ var (
 	useProxyProtocol = flagutil.NewArrayBool("httpListenAddr.useProxyProtocol", "Whether to use proxy protocol for connections accepted at the given -httpListenAddr . "+
 		"See https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt . "+
 		"With enabled proxy protocol http server cannot serve regular /metrics endpoint. Use -pushmetrics.url for metrics pushing")
-	grpcListenAddr = flagutil.NewArrayString("grpcListenAddr", "TCP address to listen for incoming grpc requests.")
+	grpcListenAddr = flag.String("grpcListenAddr", "", `TCP address to listen for incoming grpc requests.`)
 )
 
 func main() {
@@ -44,10 +44,6 @@ func main() {
 	if len(listenAddrs) == 0 {
 		listenAddrs = []string{":10428"}
 	}
-	http2ListenAddr := ":10429"
-	if len(*grpcListenAddr) != 0 {
-		http2ListenAddr = (*grpcListenAddr)[0]
-	}
 	logger.Infof("starting VictoriaTraces at %q...", listenAddrs)
 	startTime := time.Now()
 
@@ -61,15 +57,17 @@ func main() {
 		UseProxyProtocol: useProxyProtocol,
 	})
 
-	http2Server := http.Server{
-		Addr:    http2ListenAddr,
-		Handler: h2c.NewHandler(http.HandlerFunc(http2RequestHandler), &http2.Server{}),
-	}
-	go func() {
-		if err := http2Server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Fatalf("http2 server start error: %s", err)
+	if len(*grpcListenAddr) != 0 {
+		http2Server := http.Server{
+			Addr:    *grpcListenAddr,
+			Handler: h2c.NewHandler(http.HandlerFunc(http2RequestHandler), &http2.Server{}),
 		}
-	}()
+		go func() {
+			if err := http2Server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				logger.Fatalf("http2 server start error: %s", err)
+			}
+		}()
+	}
 
 	logger.Infof("started VictoriaTraces in %.3f seconds; see https://docs.victoriametrics.com/victoriatraces/", time.Since(startTime).Seconds())
 
