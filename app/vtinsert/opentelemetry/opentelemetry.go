@@ -183,7 +183,7 @@ func GrpcExportHandler(r *http.Request, w http.ResponseWriter) {
 
 	protobufData, err := getProtobufData(r)
 	if err != nil {
-		WriteErrorGrpcResponse(w, GrpcInvalidArgument, fmt.Sprintf("failed to get protobuf data from request, error: %s", err))
+		WriteErrorGrpcResponse(w, GrpcInternal, fmt.Sprintf("failed to get protobuf data from request, error: %s", err))
 		return
 	}
 	encoding := r.Header.Get("grpc-encoding")
