@@ -51,6 +51,10 @@ func RequestHandler(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func GrpcExportHandler(w http.ResponseWriter, r *http.Request) {
+	if *disableInsert {
+		opentelemetry.WriteErrorGrpcResponse(w, opentelemetry.GrpcInternal, "requests to grpc export are disabled with -insert.disable command-line flag")
+		return
+	}
 	opentelemetry.GrpcExportHandler(r, w)
 }
 

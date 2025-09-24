@@ -10,7 +10,7 @@ import (
 	"net/http"
 )
 
-// https://grpc.github.io/grpc/core/md_doc_statuscodes.html
+// https://github.com/grpc/grpc/blob/master/doc/statuscodes.md
 const (
 	GrpcOk                 = "0"
 	GrpcCancelled          = "1"
@@ -62,7 +62,7 @@ func getProtobufData(r *http.Request) ([]byte, error) {
 	return reqBody[5:], nil
 }
 
-func writeErrorGrpcResponse(w http.ResponseWriter, grpcErrorCode, grpcErrorMessage string) {
+func WriteErrorGrpcResponse(w http.ResponseWriter, grpcErrorCode, grpcErrorMessage string) {
 	w.Header().Set("Content-Type", "application/grpc+proto")
 	w.Header().Set("Trailer", "grpc-status, grpc-message")
 	w.Header().Set("Grpc-Status", grpcErrorCode)
