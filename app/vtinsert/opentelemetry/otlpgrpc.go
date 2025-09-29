@@ -1,14 +1,21 @@
 package opentelemetry
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/httpserver"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
-	"github.com/VictoriaMetrics/VictoriaTraces/lib/protoparser/opentelemetry/pb"
 	"io"
 	"net/http"
+
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/httpserver"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/protoparser/protoparserutil"
+
+	"github.com/VictoriaMetrics/VictoriaTraces/app/vtinsert/insertutil"
+	otelpb "github.com/VictoriaMetrics/VictoriaTraces/lib/protoparser/opentelemetry/pb"
 )
+
+const OLTPExportTracesGrpcPath = "/opentelemetry.proto.collector.trace.v1.TraceService/Export"
 
 // https://github.com/grpc/grpc/blob/master/doc/statuscodes.md
 const (
@@ -30,6 +37,56 @@ const (
 	GrpcDataLoss           = "15"
 	GrpcUnauthenticated    = "16"
 )
+
+func GrpcExportHandler(r *http.Request, w http.ResponseWriter) {
+	if r.URL.Path != OLTPExportTracesGrpcPath {
+		WriteErrorGrpcResponse(w, GrpcUnimplemented, fmt.Sprintf("grpc method not found: %s", r.URL.Path))
+		return
+	}
+	cp, err := insertutil.GetCommonParams(r)
+	if err != nil {
+		WriteErrorGrpcResponse(w, GrpcInternal, fmt.Sprintf("cannot parse common params from request: %s", err))
+		return
+	}
+	// stream fields must contain the service name and span name.
+	// by using arguments and headers, users can also add other fields as stream fields
+	// for potentially better efficiency.
+	cp.StreamFields = append(mandatoryStreamFields, cp.StreamFields...)
+
+	if err = insertutil.CanWriteData(); err != nil {
+		WriteErrorGrpcResponse(w, GrpcInternal, err.Error())
+		return
+	}
+
+	protobufData, err := getProtobufData(r)
+	if err != nil {
+		WriteErrorGrpcResponse(w, GrpcInternal, fmt.Sprintf("failed to get protobuf data from request, error: %s", err))
+		return
+	}
+	encoding := r.Header.Get("grpc-encoding")
+
+	err = protoparserutil.ReadUncompressedData(bytes.NewReader(protobufData), encoding, maxRequestSize, func(data []byte) error {
+		var (
+			req         otelpb.ExportTraceServiceRequest
+			callbackErr error
+		)
+		lmp := cp.NewLogMessageProcessor("opentelemetry_traces", false)
+		if callbackErr = req.UnmarshalProtobuf(data); callbackErr != nil {
+			return fmt.Errorf("cannot unmarshal request from %d protobuf bytes: %w", len(data), callbackErr)
+		}
+		callbackErr = pushExportTraceServiceRequest(&req, lmp)
+		lmp.MustClose()
+		return callbackErr
+	})
+
+	if err != nil {
+		WriteErrorGrpcResponse(w, GrpcInternal, fmt.Sprintf("cannot read OpenTelemetry protocol data: %s", err))
+		return
+	}
+
+	writeExportTracesGrpcResponse(w, 0, "")
+	return
+}
 
 // +------------+---------------------------------------------+
 // |   1 byte   |                 4 bytes                     |
@@ -75,8 +132,8 @@ func writeExportTracesGrpcResponse(w http.ResponseWriter, rejectedSpans int64, e
 	// The server MUST leave the partial_success field unset in case of a successful response.
 	// https://opentelemetry.io/docs/specs/otlp/#full-success
 	if rejectedSpans != 0 || errorMessage == "" {
-		resp := pb.ExportTraceServiceResponse{
-			ExportTracePartialSuccess: pb.ExportTracePartialSuccess{
+		resp := otelpb.ExportTraceServiceResponse{
+			ExportTracePartialSuccess: otelpb.ExportTracePartialSuccess{
 				RejectedSpans: rejectedSpans,
 				ErrorMessage:  errorMessage,
 			},
