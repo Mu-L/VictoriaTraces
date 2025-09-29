@@ -15,13 +15,13 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/procutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/pushmetrics"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 
 	"github.com/VictoriaMetrics/VictoriaTraces/app/vtinsert"
 	"github.com/VictoriaMetrics/VictoriaTraces/app/vtinsert/insertutil"
 	"github.com/VictoriaMetrics/VictoriaTraces/app/vtselect"
 	"github.com/VictoriaMetrics/VictoriaTraces/app/vtstorage"
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
 )
 
 var (
@@ -121,7 +121,7 @@ func httpRequestHandler(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func http2RequestHandler(w http.ResponseWriter, r *http.Request) {
-	vtinsert.GrpcExportHandler(w, r)
+	vtinsert.GRPCRequestHandler(w, r)
 }
 
 func usage() {
