@@ -29,7 +29,7 @@ var (
 	useProxyProtocol = flagutil.NewArrayBool("httpListenAddr.useProxyProtocol", "Whether to use proxy protocol for connections accepted at the given -httpListenAddr . "+
 		"See https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt . "+
 		"With enabled proxy protocol http server cannot serve regular /metrics endpoint. Use -pushmetrics.url for metrics pushing")
-	grpcListenAddr = flag.String("grpcListenAddr", "", `TCP address to listen for incoming grpc requests.`)
+	otlpGRPCListenAddr = flag.String("otlpGRPCListenAddr", "", `TCP address for accepting OTLP gRPC requests. ":4317" is the recommend value when needed.`)
 )
 
 func main() {
@@ -57,11 +57,12 @@ func main() {
 		UseProxyProtocol: useProxyProtocol,
 	})
 
-	if len(*grpcListenAddr) != 0 {
+	if len(*otlpGRPCListenAddr) != 0 {
 		http2Server := http.Server{
-			Addr:    *grpcListenAddr,
+			Addr:    *otlpGRPCListenAddr,
 			Handler: h2c.NewHandler(http.HandlerFunc(http2RequestHandler), &http2.Server{}),
 		}
+		logger.Infof("starting OTLP gPRC service at %q...", *otlpGRPCListenAddr)
 		go func() {
 			if err := http2Server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				logger.Fatalf("http2 server start error: %s", err)

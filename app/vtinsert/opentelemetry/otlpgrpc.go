@@ -77,6 +77,7 @@ func GrpcExportHandler(r *http.Request, w http.ResponseWriter) {
 		WriteErrorGrpcResponse(w, GrpcInvalidArgument, err.Error())
 		return
 	}
+	bb.B = bb.B[5:]
 
 	encoding := r.Header.Get("grpc-encoding")
 	err = protoparserutil.ReadUncompressedData(bb.NewReader(), encoding, maxRequestSize, func(data []byte) error {
@@ -147,7 +148,7 @@ func writeExportTracesGrpcResponse(w http.ResponseWriter, rejectedSpans int64, e
 	// The server MUST leave the partial_success field unset in case of a successful response.
 	// https://opentelemetry.io/docs/specs/otlp/#full-success
 	resp := &otelpb.ExportTraceServiceResponse{}
-	if rejectedSpans != 0 || errorMessage == "" {
+	if rejectedSpans != 0 || errorMessage != "" {
 		resp.ExportTracePartialSuccess = &otelpb.ExportTracePartialSuccess{
 			RejectedSpans: rejectedSpans,
 			ErrorMessage:  errorMessage,
