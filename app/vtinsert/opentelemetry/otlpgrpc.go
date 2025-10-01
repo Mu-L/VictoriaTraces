@@ -148,7 +148,7 @@ func writeExportTracesGrpcResponse(w http.ResponseWriter, rejectedSpans int64, e
 	// The server MUST leave the partial_success field unset in case of a successful response.
 	// https://opentelemetry.io/docs/specs/otlp/#full-success
 	resp := &otelpb.ExportTraceServiceResponse{}
-	if rejectedSpans != 0 || errorMessage != "" {
+	if rejectedSpans != 0 || errorMessage == "" {
 		resp.ExportTracePartialSuccess = &otelpb.ExportTracePartialSuccess{
 			RejectedSpans: rejectedSpans,
 			ErrorMessage:  errorMessage,
@@ -163,13 +163,12 @@ func writeExportTracesGrpcResponse(w http.ResponseWriter, rejectedSpans int64, e
 	defer responsePrefixBytes.Put(rpb)
 
 	// 5 bytes prefix: 1 byte compress flag + 4 bytes body length
-	rpb.Grow(5)
+	rpb.B = bytesutil.ResizeNoCopyNoOverallocate(rpb.B, 5)
 	binary.BigEndian.PutUint32(rpb.B[1:5], uint32(len(b)))
 
 	// append prefix(5 bytes) and body to response bytes.
 	rb.Write(rpb.B)
 	rb.Write(b)
-
 	w.Header().Set("Content-Type", "application/grpc+proto")
 	w.Header().Set("Trailer", "grpc-status, grpc-message")
 	w.Header().Set("Grpc-Status", GrpcOk)
