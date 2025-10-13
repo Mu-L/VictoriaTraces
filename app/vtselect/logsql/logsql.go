@@ -33,8 +33,8 @@ var (
 	maxQueryTimeRange = flagutil.NewExtendedDuration("search.maxQueryTimeRange", "0", "The maximum time range, which can be set in the query sent to querying APIs. "+
 		"Queries with bigger time ranges are rejected. See https://docs.victoriametrics.com/victorialogs/querying/#resource-usage-limits")
 
-	allowPartialResponseFlag = flag.Bool("search.allowPartialResponse", false, "Whether to allow returning partial responses when some of vlstorage nodes "+
-		"from the -storageNode list are unavaialbe for querying. This flag works only for cluster setup of VictoriaLogs. "+
+	allowPartialResponseFlag = flag.Bool("search.allowPartialResponse", false, "Whether to allow returning partial responses when some of vtstorage nodes "+
+		"from the -storageNode list are unavailable for querying. This flag works only for cluster setup of VictoriaTraces. "+
 		"See https://docs.victoriametrics.com/victorialogs/querying/#partial-responses")
 )
 
@@ -639,7 +639,7 @@ func ProcessLiveTailRequest(ctx context.Context, w http.ResponseWriter, r *http.
 	}
 }
 
-var liveTailRequests = metrics.NewCounter(`vl_live_tailing_requests`)
+var liveTailRequests = metrics.NewCounter(`vt_live_tailing_requests`)
 
 const tailOffsetNsecs = 5e9
 
