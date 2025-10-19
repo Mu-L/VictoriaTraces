@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"flag"
 	"fmt"
 	"net/http"
@@ -15,12 +14,11 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/procutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/pushmetrics"
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
 
 	"github.com/VictoriaMetrics/VictoriaTraces/app/victoria-traces/servicegraph"
 	"github.com/VictoriaMetrics/VictoriaTraces/app/vtinsert"
 	"github.com/VictoriaMetrics/VictoriaTraces/app/vtinsert/insertutil"
+	"github.com/VictoriaMetrics/VictoriaTraces/app/vtinsert/opentelemetry"
 	"github.com/VictoriaMetrics/VictoriaTraces/app/vtselect"
 	"github.com/VictoriaMetrics/VictoriaTraces/app/vtstorage"
 )
@@ -60,17 +58,10 @@ func main() {
 		UseProxyProtocol: useProxyProtocol,
 	})
 
+	var grpcSrv *opentelemetry.OTLPGrpcServer
 	if len(*otlpGRPCListenAddr) != 0 {
-		http2Server := http.Server{
-			Addr:    *otlpGRPCListenAddr,
-			Handler: h2c.NewHandler(http.HandlerFunc(http2RequestHandler), &http2.Server{}),
-		}
 		logger.Infof("starting OTLP gPRC service at %q...", *otlpGRPCListenAddr)
-		go func() {
-			if err := http2Server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				logger.Fatalf("http2 server start error: %s", err)
-			}
-		}()
+		grpcSrv = opentelemetry.MustStartOTLPServer(*otlpGRPCListenAddr, false)
 	}
 
 	logger.Infof("started VictoriaTraces in %.3f seconds; see https://docs.victoriametrics.com/victoriatraces/", time.Since(startTime).Seconds())
@@ -87,6 +78,9 @@ func main() {
 	}
 	logger.Infof("successfully shut down the webservice in %.3f seconds", time.Since(startTime).Seconds())
 
+	if grpcSrv != nil {
+		grpcSrv.MustStop()
+	}
 	servicegraph.Stop()
 	vtinsert.Stop()
 	vtselect.Stop()

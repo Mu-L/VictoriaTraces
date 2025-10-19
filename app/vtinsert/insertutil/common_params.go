@@ -16,6 +16,7 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/timeutil"
 	"github.com/VictoriaMetrics/metrics"
+	"google.golang.org/grpc/metadata"
 )
 
 var (
@@ -98,8 +99,124 @@ func GetCommonParams(r *http.Request) (*CommonParams, error) {
 	return cp, nil
 }
 
+func GetMetadataCommonParams(md metadata.MD) (*CommonParams, error) {
+	// Extract tenantID
+	tenantID, err := GetTenantIDFromMetadata(md)
+	if err != nil {
+		return nil, err
+	}
+
+	var isTimeFieldSet bool
+	timeFields := []string{"_time"}
+	if tfs := GetMetadataArray(md, "VT-Time-Field"); len(tfs) > 0 {
+		isTimeFieldSet = true
+		timeFields = tfs
+	}
+
+	msgFields := GetMetadataArray(md, "VT-Msg-Field")
+	streamFields := GetMetadataArray(md, "VT-Stream-Fields")
+	ignoreFields := GetMetadataArray(md, "VT-Ignore-Fields")
+	decolorizeFields := GetMetadataArray(md, "VT-Decolorize-Fields")
+
+	extraFields, err := getMetadataExtraFields(md)
+	if err != nil {
+		return nil, err
+	}
+
+	debug := false
+	if dv := GetMetadataValue(md, "VT-Debug"); dv != "" {
+		debug, err = strconv.ParseBool(dv)
+		if err != nil {
+			return nil, fmt.Errorf("cannot parse debug=%q: %w", dv, err)
+		}
+	}
+
+	debugRequestURI := "gRPC"
+	debugRemoteAddr := "gRPC"
+
+	cp := &CommonParams{
+		TenantID:         tenantID,
+		TimeFields:       timeFields,
+		MsgFields:        msgFields,
+		StreamFields:     streamFields,
+		IgnoreFields:     ignoreFields,
+		DecolorizeFields: decolorizeFields,
+		ExtraFields:      extraFields,
+
+		IsTimeFieldSet:  isTimeFieldSet,
+		Debug:           debug,
+		DebugRequestURI: debugRequestURI,
+		DebugRemoteAddr: debugRemoteAddr,
+	}
+
+	return cp, nil
+}
+
+// GetTenantIDFromMetadata returns tenantID from md.
+func GetTenantIDFromMetadata(md metadata.MD) (logstorage.TenantID, error) {
+	var tenantID logstorage.TenantID
+
+	accountIDStr := GetMetadataValue(md, "AccountID")
+	if accountIDStr != "" {
+		n, err := strconv.ParseUint(accountIDStr, 10, 32)
+		if err != nil {
+			return tenantID, fmt.Errorf("cannot parse accountID %q: %w", accountIDStr, err)
+		}
+		tenantID.AccountID = uint32(n)
+	}
+
+	projectIDStr := GetMetadataValue(md, "ProjectID")
+	if projectIDStr != "" {
+		n, err := strconv.ParseUint(projectIDStr, 10, 32)
+		if err != nil {
+			return tenantID, fmt.Errorf("cannot parse projectID %q: %w", projectIDStr, err)
+		}
+		tenantID.ProjectID = uint32(n)
+	}
+
+	return tenantID, nil
+}
+
+// GetMetadataArray returns an array of comma-separated values from md with headerKey header.
+func GetMetadataArray(md metadata.MD, headerKey string) []string {
+	v := GetMetadataValue(md, headerKey)
+	if v == "" {
+		return nil
+	}
+	return strings.Split(v, ",")
+}
+
+// GetMetadataValue returns md value for the given headerKey header.
+func GetMetadataValue(md metadata.MD, headerKey string) string {
+	v := md.Get(headerKey)
+	if len(v) > 0 {
+		return v[0]
+	}
+	return ""
+}
+
 func getExtraFields(r *http.Request) ([]logstorage.Field, error) {
 	efs := httputil.GetArray(r, "extra_fields", "VT-Extra-Fields")
+	if len(efs) == 0 {
+		return nil, nil
+	}
+
+	extraFields := make([]logstorage.Field, len(efs))
+	for i, ef := range efs {
+		n := strings.Index(ef, "=")
+		if n <= 0 || n == len(ef)-1 {
+			return nil, fmt.Errorf(`invalid extra_field format: %q; must be in the form "field=value"`, ef)
+		}
+		extraFields[i] = logstorage.Field{
+			Name:  ef[:n],
+			Value: ef[n+1:],
+		}
+	}
+	return extraFields, nil
+}
+
+func getMetadataExtraFields(md metadata.MD) ([]logstorage.Field, error) {
+	efs := GetMetadataArray(md, "VT-Extra-Fields")
 	if len(efs) == 0 {
 		return nil, nil
 	}

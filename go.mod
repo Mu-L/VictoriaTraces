@@ -13,8 +13,8 @@ require (
 	github.com/valyala/fastjson v1.6.4
 	github.com/valyala/fastrand v1.1.0
 	github.com/valyala/quicktemplate v1.8.0
-	golang.org/x/net v0.42.0
 	golang.org/x/time v0.12.0
+	google.golang.org/grpc v1.75.1
 )
 
 require (
@@ -25,7 +25,10 @@ require (
 	github.com/valyala/fasttemplate v1.2.2 // indirect
 	github.com/valyala/gozstd v1.23.2 // indirect
 	github.com/valyala/histogram v1.2.0 // indirect
+	golang.org/x/net v0.42.0 // indirect
 	golang.org/x/oauth2 v0.30.0 // indirect
 	golang.org/x/sys v0.35.0 // indirect
 	golang.org/x/text v0.28.0 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20250728155136-f173205681a0 // indirect
+	google.golang.org/protobuf v1.36.9 // indirect
 )
