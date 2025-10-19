@@ -66,12 +66,3 @@ func insertHandler(w http.ResponseWriter, r *http.Request, path string) bool {
 
 	return false
 }
-
-// GRPCRequestHandler handles gRPC insert requests over HTTP for VictoriaTraces.
-func GRPCRequestHandler(w http.ResponseWriter, r *http.Request) {
-	if *disableInsert {
-		opentelemetry.WriteErrorGrpcResponse(w, opentelemetry.GrpcUnavailable, "requests to grpc export are disabled with -insert.disable command-line flag")
-		return
-	}
-	opentelemetry.GrpcExportHandler(r, w)
-}

@@ -119,10 +119,6 @@ func httpRequestHandler(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
-func http2RequestHandler(w http.ResponseWriter, r *http.Request) {
-	vtinsert.GRPCRequestHandler(w, r)
-}
-
 func usage() {
 	const s = `
 victoria-traces is a traces storage and analytics service.

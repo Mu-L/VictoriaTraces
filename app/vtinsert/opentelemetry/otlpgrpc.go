@@ -11,6 +11,7 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/netutil"
 	"github.com/VictoriaMetrics/metrics"
 	"google.golang.org/grpc"
+	_ "google.golang.org/grpc/encoding/gzip"
 	"google.golang.org/grpc/metadata"
 
 	"github.com/VictoriaMetrics/VictoriaTraces/app/vtinsert/insertutil"
@@ -58,6 +59,7 @@ func (g *OTLPGrpcServer) Export(ctx context.Context, req *pb.ExportTraceServiceR
 		errorsGRPCTotal.Inc()
 		return nil, err
 	}
+	lmp.MustClose()
 
 	// update requestGRPCDuration only for successfully parsed requests
 	// There is no need in updating requestGRPCDuration for request errors,
@@ -86,7 +88,6 @@ func MustStartOTLPServer(addr string, useProxyProtocol bool) *OTLPGrpcServer {
 		s.grpcServer = grpc.NewServer(opts...)
 		pb.RegisterTraceServiceServer(s.grpcServer, s)
 		s.grpcServer.Serve(s.lnTCP)
-		logger.Infof("stopped TCP InfluxDB OTLPGrpcServer at %q", addr)
 	}()
 	return s
 }
@@ -95,9 +96,6 @@ func MustStartOTLPServer(addr string, useProxyProtocol bool) *OTLPGrpcServer {
 func (s *OTLPGrpcServer) MustStop() {
 	logger.Infof("stopping OTLP gRPC OTLPGrpcServer at %q...", s.addr)
 	s.grpcServer.GracefulStop()
-	if err := s.lnTCP.Close(); err != nil {
-		logger.Errorf("cannot close OTLP gRPC OTLPGrpcServer: %s", err)
-	}
 	s.cm.CloseAll(0)
 	s.wg.Wait()
 	logger.Infof("OTLP gRPC OTLPGrpcServer at %q have been stopped", s.addr)
