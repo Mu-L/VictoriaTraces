@@ -68,13 +68,13 @@ func GrpcExportHandler(r *http.Request, w http.ResponseWriter) {
 
 	_, err = bb.ReadFrom(r.Body)
 	if err != nil {
-		WriteErrorGrpcResponse(w, GrpcInvalidArgument, fmt.Sprintf("cannot read request body: %s", err))
+		WriteErrorGrpcResponse(w, GrpcInternal, fmt.Sprintf("cannot read request body: %s", err))
 		return
 	}
 
 	err = checkProtobufRequest(bb.B)
 	if err != nil {
-		WriteErrorGrpcResponse(w, GrpcInvalidArgument, err.Error())
+		WriteErrorGrpcResponse(w, GrpcInternal, err.Error())
 		return
 	}
 	bb.B = bb.B[5:]

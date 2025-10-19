@@ -18,6 +18,7 @@ import (
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 
+	"github.com/VictoriaMetrics/VictoriaTraces/app/victoria-traces/servicegraph"
 	"github.com/VictoriaMetrics/VictoriaTraces/app/vtinsert"
 	"github.com/VictoriaMetrics/VictoriaTraces/app/vtinsert/insertutil"
 	"github.com/VictoriaMetrics/VictoriaTraces/app/vtselect"
@@ -53,6 +54,8 @@ func main() {
 	insertutil.SetLogRowsStorage(&vtstorage.Storage{})
 	vtinsert.Init()
 
+	servicegraph.Init()
+
 	go httpserver.Serve(listenAddrs, httpRequestHandler, httpserver.ServeOptions{
 		UseProxyProtocol: useProxyProtocol,
 	})
@@ -84,6 +87,7 @@ func main() {
 	}
 	logger.Infof("successfully shut down the webservice in %.3f seconds", time.Since(startTime).Seconds())
 
+	servicegraph.Stop()
 	vtinsert.Stop()
 	vtselect.Stop()
 	vtstorage.Stop()

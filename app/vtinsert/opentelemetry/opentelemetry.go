@@ -1,7 +1,9 @@
 package opentelemetry
 
 import (
+	"context"
 	"strconv"
+	"time"
 
 	"github.com/VictoriaMetrics/VictoriaLogs/lib/logstorage"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/flagutil"
@@ -59,7 +61,6 @@ func pushFieldsFromScopeSpans(ss *otelpb.ScopeSpans, commonFields []logstorage.F
 func pushFieldsFromSpan(span *otelpb.Span, scopeCommonFields []logstorage.Field, lmp insertutil.LogMessageProcessor) []logstorage.Field {
 	fields := scopeCommonFields
 	fields = append(fields,
-		logstorage.Field{Name: otelpb.TraceIDField, Value: span.TraceID},
 		logstorage.Field{Name: otelpb.SpanIDField, Value: span.SpanID},
 		logstorage.Field{Name: otelpb.TraceStateField, Value: span.TraceState},
 		logstorage.Field{Name: otelpb.ParentSpanIDField, Value: span.ParentSpanID},
@@ -107,20 +108,29 @@ func pushFieldsFromSpan(span *otelpb.Span, scopeCommonFields []logstorage.Field,
 		// append link attributes
 		fields = appendKeyValuesWithPrefixSuffix(fields, link.Attributes, "", linkFieldPrefix+otelpb.LinkAttrPrefix, linkFieldSuffix)
 	}
-	fields = append(fields, logstorage.Field{
-		Name:  "_msg",
-		Value: msgFieldValue,
-	})
-	lmp.AddRow(int64(span.EndTimeUnixNano), fields, nil)
+	fields = append(fields,
+		logstorage.Field{Name: "_msg", Value: msgFieldValue},
+		// MUST: always place TraceIDField at the last. The Trace ID is required for data distribution.
+		// Placing it at the last position helps netinsert to find it easily, without adding extra field to
+		// *logstorage.InsertRow structure, which is required due to the sync between logstorage and VictoriaTraces.
+		// todo: @jiekun the trace ID field MUST be the last field. add extra ways to secure it.
+		logstorage.Field{Name: otelpb.TraceIDField, Value: span.TraceID},
+	)
 
-	// create an entity in trace-id-idx stream, if this trace_id hasn't been seen before.
+	// Create an entry in the trace-id-idx stream if this trace_id hasn't been seen before.
+	// The index entry must be written first to ensure that an index always exists for the data.
+	// During querying, if no index is found, the data must not exist.
 	if !traceIDCache.Has([]byte(span.TraceID)) {
 		lmp.AddRow(int64(span.StartTimeUnixNano), []logstorage.Field{
-			{Name: otelpb.TraceIDIndexFieldName, Value: span.TraceID},
 			{Name: "_msg", Value: msgFieldValue},
+			// todo: @jiekun the trace ID field MUST be the last field. add extra ways to secure it.
+			{Name: otelpb.TraceIDIndexFieldName, Value: span.TraceID},
 		}, []logstorage.Field{{Name: otelpb.TraceIDIndexStreamName, Value: strconv.FormatUint(xxhash.Sum64String(span.TraceID)%otelpb.TraceIDIndexPartitionCount, 10)}})
 		traceIDCache.Set([]byte(span.TraceID), nil)
 	}
+
+	lmp.AddRow(int64(span.EndTimeUnixNano), fields, nil)
+
 	return fields
 }
 
@@ -151,4 +161,22 @@ func appendKeyValuesWithPrefixSuffix(fields []logstorage.Field, kvs []*otelpb.Ke
 		})
 	}
 	return fields
+}
+
+func PersistServiceGraph(ctx context.Context, tenantID logstorage.TenantID, fields [][]logstorage.Field, timestamp time.Time) error {
+	cp := insertutil.CommonParams{
+		TenantID:   tenantID,
+		TimeFields: []string{"_time"},
+	}
+	lmp := cp.NewLogMessageProcessor("internalinsert_servicegraph", false)
+
+	for _, row := range fields {
+		f := append(row, logstorage.Field{
+			Name:  "_msg",
+			Value: "-",
+		})
+		lmp.AddRow(timestamp.UnixNano(), f, []logstorage.Field{{Name: otelpb.ServiceGraphStreamName, Value: "-"}})
+	}
+	lmp.MustClose()
+	return nil
 }
