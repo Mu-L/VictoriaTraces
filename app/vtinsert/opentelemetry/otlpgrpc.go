@@ -7,7 +7,6 @@ import (
 	"net"
 	"strconv"
 	"sync"
-	"time"
 
 	"github.com/VictoriaMetrics/VictoriaLogs/lib/logstorage"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
@@ -16,7 +15,6 @@ import (
 	"github.com/cespare/xxhash/v2"
 	"google.golang.org/grpc"
 	_ "google.golang.org/grpc/encoding/gzip"
-	"google.golang.org/grpc/metadata"
 
 	"github.com/VictoriaMetrics/VictoriaTraces/app/vtinsert/insertutil"
 	collector "github.com/VictoriaMetrics/VictoriaTraces/lib/proto/opentelemetry/proto/collector/trace/v1"
@@ -43,35 +41,6 @@ type OTLPGrpcServer struct {
 }
 
 func (g *OTLPGrpcServer) Export(ctx context.Context, req *collector.ExportTraceServiceRequest) (*collector.ExportTraceServiceResponse, error) {
-	startTime := time.Now()
-	requestsGRPCTotal.Inc()
-
-	md, _ := metadata.FromIncomingContext(ctx)
-	cp, err := insertutil.GetMetadataCommonParams(md)
-	if err != nil {
-		return nil, err
-	}
-	// stream fields must contain the service name and span name.
-	// by using arguments and headers, users can also add other fields as stream fields
-	// for potentially better efficiency.
-	cp.StreamFields = append(mandatoryStreamFields, cp.StreamFields...)
-
-	if err = insertutil.CanWriteData(); err != nil {
-		return nil, err
-	}
-
-	lmp := cp.NewLogMessageProcessor("opentelemetry_traces", false)
-	err = pushGRPCExportTraceServiceRequest(req, lmp)
-	lmp.MustClose()
-	if err != nil {
-		errorsGRPCTotal.Inc()
-		return nil, err
-	}
-
-	// update requestGRPCDuration only for successfully parsed requests
-	// There is no need in updating requestGRPCDuration for request errors,
-	// since their timings are usually much smaller than the timing for successful request parsing.
-	requestGRPCDuration.UpdateDuration(startTime)
 	return &collector.ExportTraceServiceResponse{}, nil
 }
 
