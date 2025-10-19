@@ -60,7 +60,6 @@ func main() {
 
 	var grpcSrv *opentelemetry.OTLPGrpcServer
 	if len(*otlpGRPCListenAddr) != 0 {
-		logger.Infof("starting OTLP gPRC service at %q...", *otlpGRPCListenAddr)
 		grpcSrv = opentelemetry.MustStartOTLPServer(*otlpGRPCListenAddr, false)
 	}
 
@@ -117,10 +116,6 @@ func httpRequestHandler(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	}
 	return false
-}
-
-func http2RequestHandler(w http.ResponseWriter, r *http.Request) {
-	vtinsert.GRPCRequestHandler(w, r)
 }
 
 func usage() {

@@ -2,6 +2,7 @@ package opentelemetry
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 	"github.com/VictoriaMetrics/metrics"
 	"github.com/cespare/xxhash/v2"
 	"google.golang.org/grpc"
+	_ "google.golang.org/grpc/encoding/gzip"
 	"google.golang.org/grpc/metadata"
 
 	"github.com/VictoriaMetrics/VictoriaTraces/app/vtinsert/insertutil"
@@ -60,6 +62,7 @@ func (g *OTLPGrpcServer) Export(ctx context.Context, req *collector.ExportTraceS
 
 	lmp := cp.NewLogMessageProcessor("opentelemetry_traces", false)
 	err = pushGRPCExportTraceServiceRequest(req, lmp)
+	lmp.MustClose()
 	if err != nil {
 		errorsGRPCTotal.Inc()
 		return nil, err
@@ -92,7 +95,6 @@ func MustStartOTLPServer(addr string, useProxyProtocol bool) *OTLPGrpcServer {
 		s.grpcServer = grpc.NewServer(opts...)
 		collector.RegisterTraceServiceServer(s.grpcServer, s)
 		s.grpcServer.Serve(s.lnTCP)
-		logger.Infof("stopped TCP InfluxDB OTLPGrpcServer at %q", addr)
 	}()
 	return s
 }
@@ -101,9 +103,6 @@ func MustStartOTLPServer(addr string, useProxyProtocol bool) *OTLPGrpcServer {
 func (s *OTLPGrpcServer) MustStop() {
 	logger.Infof("stopping OTLP gRPC OTLPGrpcServer at %q...", s.addr)
 	s.grpcServer.GracefulStop()
-	if err := s.lnTCP.Close(); err != nil {
-		logger.Errorf("cannot close OTLP gRPC OTLPGrpcServer: %s", err)
-	}
 	s.cm.CloseAll(0)
 	s.wg.Wait()
 	logger.Infof("OTLP gRPC OTLPGrpcServer at %q have been stopped", s.addr)
@@ -128,10 +127,10 @@ func pushGRPCExportTraceServiceRequest(req *collector.ExportTraceServiceRequest,
 func pushGRPCFieldsFromScopeSpans(ss *v2.ScopeSpans, commonFields []logstorage.Field, lmp insertutil.LogMessageProcessor) []logstorage.Field {
 	commonFields = append(commonFields, logstorage.Field{
 		Name:  otelpb.InstrumentationScopeName,
-		Value: ss.Scope.Name,
+		Value: ss.Scope.GetName(),
 	}, logstorage.Field{
 		Name:  otelpb.InstrumentationScopeVersion,
-		Value: ss.Scope.Version,
+		Value: ss.Scope.GetVersion(),
 	})
 	commonFields = appendGRPCKeyValuesWithPrefix(commonFields, ss.Scope.Attributes, "", otelpb.InstrumentationScopeAttrPrefix)
 	commonFieldsLen := len(commonFields)
@@ -144,9 +143,9 @@ func pushGRPCFieldsFromScopeSpans(ss *v2.ScopeSpans, commonFields []logstorage.F
 func pushGRPCFieldsFromSpan(span *v2.Span, scopeCommonFields []logstorage.Field, lmp insertutil.LogMessageProcessor) []logstorage.Field {
 	fields := scopeCommonFields
 	fields = append(fields,
-		logstorage.Field{Name: otelpb.SpanIDField, Value: string(span.SpanId)},
+		logstorage.Field{Name: otelpb.SpanIDField, Value: hex.EncodeToString(span.SpanId)},
 		logstorage.Field{Name: otelpb.TraceStateField, Value: span.TraceState},
-		logstorage.Field{Name: otelpb.ParentSpanIDField, Value: string(span.ParentSpanId)},
+		logstorage.Field{Name: otelpb.ParentSpanIDField, Value: hex.EncodeToString(span.ParentSpanId)},
 		logstorage.Field{Name: otelpb.FlagsField, Value: strconv.FormatUint(uint64(span.Flags), 10)},
 		logstorage.Field{Name: otelpb.NameField, Value: span.Name},
 		logstorage.Field{Name: otelpb.KindField, Value: strconv.FormatInt(int64(span.Kind), 10)},
@@ -181,8 +180,8 @@ func pushGRPCFieldsFromSpan(span *v2.Span, scopeCommonFields []logstorage.Field,
 		linkFieldPrefix := otelpb.LinkPrefix
 		linkFieldSuffix := ":" + strconv.Itoa(idx)
 		fields = append(fields,
-			logstorage.Field{Name: linkFieldPrefix + otelpb.LinkTraceIDField + linkFieldSuffix, Value: string(link.TraceId)},
-			logstorage.Field{Name: linkFieldPrefix + otelpb.LinkSpanIDField + linkFieldSuffix, Value: string(link.SpanId)},
+			logstorage.Field{Name: linkFieldPrefix + otelpb.LinkTraceIDField + linkFieldSuffix, Value: hex.EncodeToString(link.TraceId)},
+			logstorage.Field{Name: linkFieldPrefix + otelpb.LinkSpanIDField + linkFieldSuffix, Value: hex.EncodeToString(link.SpanId)},
 			logstorage.Field{Name: linkFieldPrefix + otelpb.LinkTraceStateField + linkFieldSuffix, Value: link.TraceState},
 			logstorage.Field{Name: linkFieldPrefix + otelpb.LinkDroppedAttributesCountField + linkFieldSuffix, Value: strconv.FormatUint(uint64(link.DroppedAttributesCount), 10)},
 			logstorage.Field{Name: linkFieldPrefix + otelpb.LinkFlagsField + linkFieldSuffix, Value: strconv.FormatUint(uint64(link.Flags), 10)},
@@ -197,7 +196,7 @@ func pushGRPCFieldsFromSpan(span *v2.Span, scopeCommonFields []logstorage.Field,
 		// Placing it at the last position helps netinsert to find it easily, without adding extra field to
 		// *logstorage.InsertRow structure, which is required due to the sync between logstorage and VictoriaTraces.
 		// todo: @jiekun the trace ID field MUST be the last field. add extra ways to secure it.
-		logstorage.Field{Name: otelpb.TraceIDField, Value: string(span.TraceId)},
+		logstorage.Field{Name: otelpb.TraceIDField, Value: hex.EncodeToString(span.TraceId)},
 	)
 
 	// Create an entry in the trace-id-idx stream if this trace_id hasn't been seen before.
@@ -207,7 +206,7 @@ func pushGRPCFieldsFromSpan(span *v2.Span, scopeCommonFields []logstorage.Field,
 		lmp.AddRow(int64(span.StartTimeUnixNano), []logstorage.Field{
 			{Name: "_msg", Value: msgFieldValue},
 			// todo: @jiekun the trace ID field MUST be the last field. add extra ways to secure it.
-			{Name: otelpb.TraceIDIndexFieldName, Value: string(span.TraceId)},
+			{Name: otelpb.TraceIDIndexFieldName, Value: hex.EncodeToString(span.TraceId)},
 		}, []logstorage.Field{{Name: otelpb.TraceIDIndexStreamName, Value: strconv.FormatUint(xxhash.Sum64(span.TraceId)%otelpb.TraceIDIndexPartitionCount, 10)}})
 		traceIDCache.Set(span.TraceId, nil)
 	}
@@ -237,15 +236,40 @@ func appendGRPCKeyValuesWithPrefixSuffix(fields []logstorage.Field, kvs []*v1.Ke
 			continue
 		}
 
-		if kvl := v.GetKvlistValue(); kvl != nil {
-			fields = appendGRPCKeyValuesWithPrefixSuffix(fields, kvl.Values, fieldName, prefix, suffix)
-			continue
+		switch x := v.Value.(type) {
+		case *v1.AnyValue_StringValue:
+			fields = append(fields, logstorage.Field{
+				Name:  prefix + fieldName + suffix,
+				Value: x.StringValue,
+			})
+		case *v1.AnyValue_BoolValue:
+			fields = append(fields, logstorage.Field{
+				Name:  prefix + fieldName + suffix,
+				Value: strconv.FormatBool(x.BoolValue),
+			})
+		case *v1.AnyValue_BytesValue:
+			fields = append(fields, logstorage.Field{
+				Name:  prefix + fieldName + suffix,
+				Value: string(x.BytesValue),
+			})
+		case *v1.AnyValue_IntValue:
+			fields = append(fields, logstorage.Field{
+				Name:  prefix + fieldName + suffix,
+				Value: strconv.FormatInt(x.IntValue, 10),
+			})
+		case *v1.AnyValue_DoubleValue:
+			fields = append(fields, logstorage.Field{
+				Name:  prefix + fieldName + suffix,
+				Value: strconv.FormatFloat(x.DoubleValue, 'g', -1, 64),
+			})
+		case *v1.AnyValue_KvlistValue:
+			fields = appendGRPCKeyValuesWithPrefixSuffix(fields, x.KvlistValue.Values, fieldName, prefix, suffix)
+		default:
+			fields = append(fields, logstorage.Field{
+				Name:  prefix + fieldName + suffix,
+				Value: v.String(),
+			})
 		}
-
-		fields = append(fields, logstorage.Field{
-			Name:  prefix + fieldName + suffix,
-			Value: v.String(),
-		})
 	}
 	return fields
 }
