@@ -12,6 +12,7 @@ The following `tip` changes can be tested by building VictoriaTraces components 
 
 ## tip
 
+* BUGFIX: [Single-node VictoriaTraces](https://docs.victoriametrics.com/victoriatraces/) and vtselect in [VictoriaTraces cluster](https://docs.victoriametrics.com/victoriatraces/cluster/): return the correct error message and the total number when searching by trace ID yields no hits in the result. Thank @huan89983 for [the bug report](https://github.com/VictoriaMetrics/VictoriaTraces/issues/77). 
 
 ## [v0.4.1](https://github.com/VictoriaMetrics/VictoriaTraces/releases/tag/v0.4.1)
 
