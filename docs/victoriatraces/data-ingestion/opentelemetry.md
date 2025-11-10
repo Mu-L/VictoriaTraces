@@ -61,7 +61,7 @@ Consider the following example for Go SDK:
 traceExporter, err := otlptracegrpc.New(ctx,
     otlptracegrpc.WithEndpoint("<victoria-traces>:4317"),
     otlptracegrpc.WithTLSCredentials(<creds>),
-	// otlptracegrpc.WithInsecure(),  // use insecure connection if TLS is disabled.
+    // otlptracegrpc.WithInsecure(),  // use insecure connection if TLS is disabled.
 )
 ```
 
