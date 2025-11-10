@@ -60,7 +60,8 @@ Consider the following example for Go SDK:
 ```go
 traceExporter, err := otlptracegrpc.New(ctx,
     otlptracegrpc.WithEndpoint("<victoria-traces>:4317"),
-    otlptracegrpc.WithInsecure(),
+    otlptracegrpc.WithTLSCredentials(<creds>),
+	// otlptracegrpc.WithInsecure(),  // use insecure connection if TLS is disabled.
 )
 ```
 
@@ -111,11 +112,13 @@ To send the collected traces to VictoriaTraces gRPC trace service, you need to f
 After that, specify endpoint for [OTLP/gRPC exporter](https://github.com/open-telemetry/opentelemetry-collector/blob/main/exporter/otlpexporter/README.md):
 ```yaml
 exporters:
+  # otlp exporter with TLS
   otlp/with-tls:
     endpoint: <victoria-traces>:4317
     tls:
       cert_file: file.cert
       key_file: file.key
+  # otlp exporter without TLS
   otlp/without-tls:
     endpoint: <victoria-traces>:4317
     tls:
