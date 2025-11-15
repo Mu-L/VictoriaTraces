@@ -26,7 +26,7 @@ The migration path from a single-node VictoriaTraces to cluster mode is very eas
 passed via `-storageNode` command-line flag to `vtinsert` and `vtselect` components of the cluster mode. See [cluster architecture](#architecture)
 for more details about VictoriaTraces cluster components.
 
-See [quick start guide](#quick-start) on how to start working with VictoriaTraces cluster.
+See [quick start guide](https://docs.victoriametrics.com/victoriatraces/quick-start/) on how to start working with VictoriaTraces cluster.
 
 ## Architecture
 
