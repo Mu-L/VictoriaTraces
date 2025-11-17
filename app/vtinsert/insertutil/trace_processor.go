@@ -264,10 +264,10 @@ func MustStartIndexWorker() {
 				lmp.AddRow(int64(index.addTime)*1000000000,
 					// fields
 					[]logstorage.Field{
-						{"_msg", "-"},
-						{otelpb.TraceIDIndexFieldName, indexData.traceID},
-						{otelpb.TraceIDIndexStartTimeFieldName, indexData.startTime},
-						{otelpb.TraceIDIndexEndTimeFieldName, indexData.endTime},
+						{Name: "_msg", Value: "-"},
+						{Name: otelpb.TraceIDIndexFieldName, Value: indexData.traceID},
+						{Name: otelpb.TraceIDIndexStartTimeFieldName, Value: indexData.startTime},
+						{Name: otelpb.TraceIDIndexEndTimeFieldName, Value: indexData.endTime},
 					},
 					// stream fields
 					[]logstorage.Field{

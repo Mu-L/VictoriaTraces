@@ -409,10 +409,7 @@ func (*Storage) CanWriteData() error {
 }
 
 func (*Storage) IsLocalStorage() bool {
-	if localStorage != nil {
-		return true
-	}
-	return false
+	return localStorage != nil
 }
 
 // MustAddRows adds lr to vtstorage

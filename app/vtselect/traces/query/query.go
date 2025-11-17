@@ -424,13 +424,14 @@ func findTraceIDTimeSplitTimeRange(ctx context.Context, q *logstorage.Query, cp 
 		}
 
 		for _, c := range columns {
-			if c.Name == otelpb.TraceIDIndexStartTimeFieldName {
+			switch c.Name {
+			case otelpb.TraceIDIndexStartTimeFieldName:
 				for _, v := range c.Values {
 					if traceIDStartTimeStr == "" || traceIDStartTimeStr > v {
 						traceIDStartTimeStr = strings.Clone(v)
 					}
 				}
-			} else if c.Name == otelpb.TraceIDIndexEndTimeFieldName {
+			case otelpb.TraceIDIndexEndTimeFieldName:
 				for _, v := range c.Values {
 					if traceIDEndTimeStr == "" || traceIDEndTimeStr < v {
 						traceIDEndTimeStr = strings.Clone(v)
