@@ -6,9 +6,11 @@ package pb
 
 // TraceID index stream and fields
 const (
-	TraceIDIndexStreamName     = "trace_id_idx_stream"
-	TraceIDIndexFieldName      = "trace_id_idx"
-	TraceIDIndexPartitionCount = uint64(1024)
+	TraceIDIndexStreamName         = "trace_id_idx_stream"
+	TraceIDIndexFieldName          = "trace_id_idx"
+	TraceIDIndexStartTimeFieldName = "start_time"
+	TraceIDIndexEndTimeFieldName   = "end_time"
+	TraceIDIndexPartitionCount     = uint64(1024)
 )
 
 // service graph stream and fields

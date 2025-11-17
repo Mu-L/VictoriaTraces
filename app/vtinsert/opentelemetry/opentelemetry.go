@@ -7,9 +7,6 @@ import (
 
 	"github.com/VictoriaMetrics/VictoriaLogs/lib/logstorage"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/flagutil"
-	"github.com/VictoriaMetrics/fastcache"
-	"github.com/cespare/xxhash/v2"
-
 	"github.com/VictoriaMetrics/VictoriaTraces/app/vtinsert/insertutil"
 	otelpb "github.com/VictoriaMetrics/VictoriaTraces/lib/protoparser/opentelemetry/pb"
 )
@@ -21,14 +18,9 @@ var (
 	msgFieldValue         = "-"
 )
 
-var (
-	// traceIDCache for deduplicating trace_id
-	traceIDCache = fastcache.New(32 * 1024 * 1024)
-)
-
 // pushExportTraceServiceRequest is the entry point of OTLP data processing. It should be called by different
-// request handlers such as OTLPHTTP handler, OTLPgRPC handler.
-func pushExportTraceServiceRequest(req *otelpb.ExportTraceServiceRequest, lmp insertutil.LogMessageProcessor) error {
+// request handlers such as OTLP/HTTP handler, OTLP/gRPC handler.
+func pushExportTraceServiceRequest(req *otelpb.ExportTraceServiceRequest, tsp insertutil.LogMessageProcessor) error {
 	var commonFields []logstorage.Field
 	for _, rs := range req.ResourceSpans {
 		commonFields = commonFields[:0]
@@ -36,13 +28,13 @@ func pushExportTraceServiceRequest(req *otelpb.ExportTraceServiceRequest, lmp in
 		commonFields = appendKeyValuesWithPrefix(commonFields, attributes, "", otelpb.ResourceAttrPrefix)
 		commonFieldsLen := len(commonFields)
 		for _, ss := range rs.ScopeSpans {
-			commonFields = pushFieldsFromScopeSpans(ss, commonFields[:commonFieldsLen], lmp)
+			commonFields = pushFieldsFromScopeSpans(ss, commonFields[:commonFieldsLen], tsp)
 		}
 	}
 	return nil
 }
 
-func pushFieldsFromScopeSpans(ss *otelpb.ScopeSpans, commonFields []logstorage.Field, lmp insertutil.LogMessageProcessor) []logstorage.Field {
+func pushFieldsFromScopeSpans(ss *otelpb.ScopeSpans, commonFields []logstorage.Field, tsp insertutil.LogMessageProcessor) []logstorage.Field {
 	commonFields = append(commonFields, logstorage.Field{
 		Name:  otelpb.InstrumentationScopeName,
 		Value: ss.Scope.Name,
@@ -53,12 +45,12 @@ func pushFieldsFromScopeSpans(ss *otelpb.ScopeSpans, commonFields []logstorage.F
 	commonFields = appendKeyValuesWithPrefix(commonFields, ss.Scope.Attributes, "", otelpb.InstrumentationScopeAttrPrefix)
 	commonFieldsLen := len(commonFields)
 	for _, span := range ss.Spans {
-		commonFields = pushFieldsFromSpan(span, commonFields[:commonFieldsLen], lmp)
+		commonFields = pushFieldsFromSpan(span, commonFields[:commonFieldsLen], tsp)
 	}
 	return commonFields
 }
 
-func pushFieldsFromSpan(span *otelpb.Span, scopeCommonFields []logstorage.Field, lmp insertutil.LogMessageProcessor) []logstorage.Field {
+func pushFieldsFromSpan(span *otelpb.Span, scopeCommonFields []logstorage.Field, tsp insertutil.LogMessageProcessor) []logstorage.Field {
 	fields := scopeCommonFields
 	fields = append(fields,
 		logstorage.Field{Name: otelpb.SpanIDField, Value: span.SpanID},
@@ -117,19 +109,7 @@ func pushFieldsFromSpan(span *otelpb.Span, scopeCommonFields []logstorage.Field,
 		logstorage.Field{Name: otelpb.TraceIDField, Value: span.TraceID},
 	)
 
-	// Create an entry in the trace-id-idx stream if this trace_id hasn't been seen before.
-	// The index entry must be written first to ensure that an index always exists for the data.
-	// During querying, if no index is found, the data must not exist.
-	if !traceIDCache.Has([]byte(span.TraceID)) {
-		lmp.AddRow(int64(span.StartTimeUnixNano), []logstorage.Field{
-			{Name: "_msg", Value: msgFieldValue},
-			// todo: @jiekun the trace ID field MUST be the last field. add extra ways to secure it.
-			{Name: otelpb.TraceIDIndexFieldName, Value: span.TraceID},
-		}, []logstorage.Field{{Name: otelpb.TraceIDIndexStreamName, Value: strconv.FormatUint(xxhash.Sum64String(span.TraceID)%otelpb.TraceIDIndexPartitionCount, 10)}})
-		traceIDCache.Set([]byte(span.TraceID), nil)
-	}
-
-	lmp.AddRow(int64(span.EndTimeUnixNano), fields, nil)
+	tsp.AddRow(int64(span.EndTimeUnixNano), fields, nil)
 
 	return fields
 }

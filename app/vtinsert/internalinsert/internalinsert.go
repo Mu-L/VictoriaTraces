@@ -46,7 +46,7 @@ func RequestHandler(w http.ResponseWriter, r *http.Request) {
 
 	encoding := r.Header.Get("Content-Encoding")
 	err = protoparserutil.ReadUncompressedData(r.Body, encoding, maxRequestSize, func(data []byte) error {
-		lmp := cp.NewLogMessageProcessor("internalinsert", false)
+		lmp := cp.NewTraceProcessor("internalinsert", false)
 		irp := lmp.(insertutil.InsertRowProcessor)
 		err := parseData(irp, data)
 		lmp.MustClose()

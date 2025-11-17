@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"fmt"
+	"github.com/VictoriaMetrics/VictoriaTraces/app/vtinsert/insertutil"
 	"net/http"
 	"strings"
 	"time"
@@ -41,6 +42,8 @@ func Init() {
 	if *otlpGRPCListenAddr != "" {
 		initGRPCServer()
 	}
+
+	insertutil.MustStartIndexWorker()
 }
 
 // Stop stops vtinsert
@@ -48,6 +51,8 @@ func Stop() {
 	if *otlpGRPCListenAddr != "" {
 		stopGRPCServer()
 	}
+
+	insertutil.MustStopIndexWorker()
 }
 
 // RequestHandler handles HTTP insert requests for VictoriaTraces

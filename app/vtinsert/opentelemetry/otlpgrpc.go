@@ -91,12 +91,12 @@ func otlpExportTracesHandler(r *http.Request, w http.ResponseWriter) {
 			req         otelpb.ExportTraceServiceRequest
 			callbackErr error
 		)
-		lmp := cp.NewLogMessageProcessor("opentelemetry_traces_otlpgrpc", false)
+		tsp := cp.NewTraceProcessor("opentelemetry_traces_otlpgrpc", false)
 		if callbackErr = req.UnmarshalProtobuf(data); callbackErr != nil {
 			return fmt.Errorf("cannot unmarshal request from %d protobuf bytes: %w", len(data), callbackErr)
 		}
-		callbackErr = pushExportTraceServiceRequest(&req, lmp)
-		lmp.MustClose()
+		callbackErr = pushExportTraceServiceRequest(&req, tsp)
+		tsp.MustClose()
 		return callbackErr
 	})
 	if err != nil {
