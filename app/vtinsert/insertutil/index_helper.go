@@ -31,9 +31,6 @@ var (
 	// but not on the prev map.
 	traceIDIndexMapPrev = &sync.Map{}
 
-	// muSwitch locks the read and write for both cur and prev
-	muSwitch = sync.Mutex{}
-
 	// logMessageProcessorMap holds lmp for different tenants.
 	logMessageProcessorMap = make(map[logstorage.TenantID]LogMessageProcessor)
 
