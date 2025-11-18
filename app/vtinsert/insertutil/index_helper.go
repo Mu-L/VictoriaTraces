@@ -26,13 +26,11 @@ type indexEntry struct {
 var (
 	// traceIDIndexMapCur and traceIDIndexMapPrev holds the index data of a traceID before this index could be persisted.
 	// The cur map can accept new entries.
-	traceIDIndexMapCur = make(map[string]*indexEntry)
+	traceIDIndexMapCur = &sync.Map{}
 	// The prev map only serves for fast lookup of existing entries. Write operation can be performed on the *indexEntry,
 	// but not on the prev map.
-	traceIDIndexMapPrev = make(map[string]*indexEntry)
+	traceIDIndexMapPrev = &sync.Map{}
 
-	// mu protects traceIDIndexMapCur
-	mu = sync.RWMutex{}
 	// muSwitch locks the read and write for both cur and prev
 	muSwitch = sync.Mutex{}
 
@@ -45,36 +43,30 @@ var (
 // pushIndexToQueue organize index data (from LogMessageProcessor interface or InsertRowProcessor interface)
 // and push it to the queue.
 func pushIndexToQueue(tenantID logstorage.TenantID, traceID string, startTime, endTime string) bool {
-	mu.RLock()
-
-	index, ok := traceIDIndexMapCur[traceID]
+	index, ok := traceIDIndexMapCur.Load(traceID)
 	if ok {
-		index.startTimeNano = min(index.startTimeNano, startTime)
-		index.endTimeNano = max(index.endTimeNano, endTime)
-		mu.RUnlock()
+		idxEntry := index.(*indexEntry)
+		idxEntry.startTimeNano = min(idxEntry.startTimeNano, startTime)
+		idxEntry.endTimeNano = max(idxEntry.endTimeNano, endTime)
 		return true
 	}
 
-	index, ok = traceIDIndexMapPrev[traceID]
+	index, ok = traceIDIndexMapPrev.Load(traceID)
 	if ok {
-		index.startTimeNano = min(index.startTimeNano, startTime)
-		index.endTimeNano = max(index.endTimeNano, endTime)
-		mu.RUnlock()
+		idxEntry := index.(*indexEntry)
+		idxEntry.startTimeNano = min(idxEntry.startTimeNano, startTime)
+		idxEntry.endTimeNano = max(idxEntry.endTimeNano, endTime)
 		return true
 	}
 
-	mu.RUnlock()
-
-	index = &indexEntry{
+	idxEntry := &indexEntry{
 		tenantID:      tenantID,
 		startTimeNano: startTime,
 		endTimeNano:   endTime,
 		addTime:       fasttime.UnixTimestamp(),
 	}
 
-	mu.Lock()
-	defer mu.Unlock()
-	traceIDIndexMapCur[traceID] = index
+	traceIDIndexMapCur.Store(traceID, idxEntry)
 	return true
 }
 
@@ -90,8 +82,8 @@ func MustStartIndexWorker() {
 				// todo finish traceIDCh before exit
 				return
 			case <-ticker.C:
-				mu.Lock()
-				for traceID, idxEntry := range traceIDIndexMapPrev {
+				traceIDIndexMapPrev.Range(func(traceID, index any) bool {
+					idxEntry := index.(*indexEntry)
 					lmp, ok := logMessageProcessorMap[idxEntry.tenantID]
 					if !ok {
 						// init the lmp for the current tenant
@@ -107,20 +99,20 @@ func MustStartIndexWorker() {
 						// fields
 						[]logstorage.Field{
 							{Name: "_msg", Value: "-"},
-							{Name: otelpb.TraceIDIndexFieldName, Value: traceID},
+							{Name: otelpb.TraceIDIndexFieldName, Value: traceID.(string)},
 							{Name: otelpb.TraceIDIndexStartTimeFieldName, Value: idxEntry.startTimeNano},
 							{Name: otelpb.TraceIDIndexEndTimeFieldName, Value: idxEntry.endTimeNano},
 						},
 						// stream fields
 						[]logstorage.Field{
-							{Name: otelpb.TraceIDIndexStreamName, Value: strconv.FormatUint(xxhash.Sum64String(traceID)%otelpb.TraceIDIndexPartitionCount, 10)},
+							{Name: otelpb.TraceIDIndexStreamName, Value: strconv.FormatUint(xxhash.Sum64String(traceID.(string))%otelpb.TraceIDIndexPartitionCount, 10)},
 						},
 					)
-				}
+					return true
+				})
 
-				clear(traceIDIndexMapPrev)
+				traceIDIndexMapPrev.Clear()
 				traceIDIndexMapCur, traceIDIndexMapPrev = traceIDIndexMapPrev, traceIDIndexMapCur
-				mu.Unlock()
 			}
 		}
 	}()
