@@ -146,7 +146,7 @@ func (pt *partition) mustAddRows(lr *LogRows) {
 		}
 	}
 	if len(pendingRows) > 0 {
-		logNewStreams := pt.s.logNewStreams
+		logNewStreams := pt.s.logNewStreams.Load()
 		streamTagsCanonicals := lr.streamTagsCanonicals
 		sort.Slice(pendingRows, func(i, j int) bool {
 			return streamIDs[pendingRows[i]].less(&streamIDs[pendingRows[j]])
@@ -256,6 +256,14 @@ func (pt *partition) updateStats(ps *PartitionStats) {
 // mustForceMerge runs forced merge for all the parts in pt.
 func (pt *partition) mustForceMerge() {
 	pt.ddb.mustForceMergeAllParts()
+}
+
+func (pt *partition) deleteRows(sso *storageSearchOptions, stopCh <-chan struct{}) bool {
+	// make recently ingested rows visible for search, so they could be deleted.
+	pt.debugFlush()
+
+	pso := pt.getSearchOptions(sso)
+	return pt.ddb.deleteRows(pso, stopCh)
 }
 
 func getPartitionDayFromName(name string) (int64, error) {

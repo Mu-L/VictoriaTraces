@@ -30,7 +30,7 @@ func TestRunQueryOutOfRetention(t *testing.T) {
 	query.AddTimeFilter(0, time.Now().Add(-retentionPeriod.Duration()+5*time.Second).UnixNano())
 
 	// the query should be executed with empty result.
-	qctx := logstorage.NewQueryContext(context.TODO(), &logstorage.QueryStats{}, []logstorage.TenantID{}, query, false)
+	qctx := logstorage.NewQueryContext(context.TODO(), &logstorage.QueryStats{}, []logstorage.TenantID{}, query, false, nil)
 	if err := RunQuery(qctx, func(workerID uint, db *logstorage.DataBlock) {}); err != nil {
 		t.Fatalf("RunQuery returns error for correct query")
 	}
@@ -39,7 +39,7 @@ func TestRunQueryOutOfRetention(t *testing.T) {
 	query.AddTimeFilter(0, time.Now().Add(-retentionPeriod.Duration()-10*time.Second).UnixNano())
 
 	// the query should stop with ErrOutOfRetention error
-	qctx = logstorage.NewQueryContext(context.TODO(), &logstorage.QueryStats{}, []logstorage.TenantID{}, query, false)
+	qctx = logstorage.NewQueryContext(context.TODO(), &logstorage.QueryStats{}, []logstorage.TenantID{}, query, false, nil)
 	if !errors.Is(RunQuery(qctx, nil), common.ErrOutOfRetention) {
 		t.Fatalf("RunQuery fail to returns ErrOutOfRetention for query which with too small endTimestamp")
 	}

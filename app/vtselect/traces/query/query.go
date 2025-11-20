@@ -45,12 +45,21 @@ type CommonParams struct {
 	TenantIDs []logstorage.TenantID
 	Query     *logstorage.Query
 
+	// Whether to disable compression of the response sent to the vtselect.
+	DisableCompression bool
+
+	// Whether to allow partial response when some of vtstorage nodes are unavailable.
+	AllowPartialResponse bool
+
+	// Optional list of log fields or log field prefixes ending with *, which must be hidden during query execution.
+	HiddenFieldsFilters []string
+
 	// qs contains execution statistics for the Query.
 	qs logstorage.QueryStats
 }
 
 func (cp *CommonParams) NewQueryContext(ctx context.Context) *logstorage.QueryContext {
-	return logstorage.NewQueryContext(ctx, &cp.qs, cp.TenantIDs, cp.Query, false)
+	return logstorage.NewQueryContext(ctx, &cp.qs, cp.TenantIDs, cp.Query, cp.AllowPartialResponse, cp.HiddenFieldsFilters)
 }
 
 func (cp *CommonParams) UpdatePerQueryStatsMetrics() {

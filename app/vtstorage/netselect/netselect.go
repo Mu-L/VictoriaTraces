@@ -2,6 +2,7 @@ package netselect
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,6 +20,7 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding/zstd"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/httpserver"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/httputil"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/promauth"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/slicesutil"
 	"github.com/VictoriaMetrics/metrics"
@@ -30,37 +32,52 @@ const (
 	// FieldNamesProtocolVersion is the version of the protocol used for /internal/select/field_names HTTP endpoint.
 	//
 	// It must be updated every time the protocol changes.
-	FieldNamesProtocolVersion = "v2"
+	FieldNamesProtocolVersion = "v4"
 
 	// FieldValuesProtocolVersion is the version of the protocol used for /internal/select/field_values HTTP endpoint.
 	//
 	// It must be updated every time the protocol changes.
-	FieldValuesProtocolVersion = "v2"
+	FieldValuesProtocolVersion = "v4"
 
 	// StreamFieldNamesProtocolVersion is the version of the protocol used for /internal/select/stream_field_names HTTP endpoint.
 	//
 	// It must be updated every time the protocol changes.
-	StreamFieldNamesProtocolVersion = "v2"
+	StreamFieldNamesProtocolVersion = "v4"
 
 	// StreamFieldValuesProtocolVersion is the version of the protocol used for /internal/select/stream_field_values HTTP endpoint.
 	//
 	// It must be updated every time the protocol changes.
-	StreamFieldValuesProtocolVersion = "v2"
+	StreamFieldValuesProtocolVersion = "v4"
 
 	// StreamsProtocolVersion is the version of the protocol used for /internal/select/streams HTTP endpoint.
 	//
 	// It must be updated every time the protocol changes.
-	StreamsProtocolVersion = "v2"
+	StreamsProtocolVersion = "v4"
 
 	// StreamIDsProtocolVersion is the version of the protocol used for /internal/select/stream_ids HTTP endpoint.
 	//
 	// It must be updated every time the protocol changes.
-	StreamIDsProtocolVersion = "v2"
+	StreamIDsProtocolVersion = "v4"
 
 	// QueryProtocolVersion is the version of the protocol used for /internal/select/query HTTP endpoint.
 	//
 	// It must be updated every time the protocol changes.
-	QueryProtocolVersion = "v2"
+	QueryProtocolVersion = "v4"
+
+	// DeleteRunTaskProtocolVersion is the version of the protocol used for /internal/delete/run_task HTTP endpoint.
+	//
+	// It must be updated every time the protocol changes.
+	DeleteRunTaskProtocolVersion = "v1"
+
+	// DeleteStopTaskProtocolVersion is the version of the protocol used for /internal/delete/stop_task HTTP endpoint.
+	//
+	// It must be updated every time the protocol changes.
+	DeleteStopTaskProtocolVersion = "v1"
+
+	// DeleteActiveTasksProtocolVersion is the version of the protocol used for /internal/delete/active_tasks endpoint.
+	//
+	// It must be updated every time the protocol changes.
+	DeleteActiveTasksProtocolVersion = "v1"
 )
 
 // Storage is a network storage for querying remote storage nodes in the cluster.
@@ -138,7 +155,7 @@ func (sn *storageNode) runQuery(qctx *logstorage.QueryContext, processBlock func
 				// The end of response stream
 				return nil
 			}
-			return fmt.Errorf("cannot read block size from %q: %w", path, err)
+			return fmt.Errorf("cannot read block size from %q: %w", reqURL, err)
 		}
 		blockLen := encoding.UnmarshalUint64(dataLenBuf[:])
 		if blockLen > math.MaxInt {
@@ -230,13 +247,40 @@ func (sn *storageNode) getStreamIDs(qctx *logstorage.QueryContext, limit uint64)
 	return sn.getValuesWithHits(qctx, "/internal/select/stream_ids", args)
 }
 
+func (sn *storageNode) getTenantIDs(ctx context.Context, start, end int64) ([]logstorage.TenantID, error) {
+	args := url.Values{}
+	args.Set("start", fmt.Sprintf("%d", start))
+	args.Set("end", fmt.Sprintf("%d", end))
+
+	path := "/internal/select/tenant_ids"
+	data, reqURL, err := sn.getPlainResponseBodyForPathAndArgs(ctx, path, args)
+	if err != nil {
+		return nil, err
+	}
+	var tenantIDs []logstorage.TenantID
+	if err := json.Unmarshal(data, &tenantIDs); err != nil {
+		return nil, fmt.Errorf("cannot unmarshal tenantIDs received from %q; data=%q: %w", reqURL, data, err)
+	}
+	return tenantIDs, nil
+}
+
 func (sn *storageNode) getCommonArgs(version string, qctx *logstorage.QueryContext) url.Values {
+	// ATTENTION: the *ProtocolVersion consts must be incremented every time the set of common args changes or its format changes.
+
 	args := url.Values{}
 	args.Set("version", version)
-	args.Set("tenant_ids", string(logstorage.MarshalTenantIDs(nil, qctx.TenantIDs)))
+	args.Set("tenant_ids", string(logstorage.MarshalTenantIDsToJSON(qctx.TenantIDs)))
 	args.Set("query", qctx.Query.String())
 	args.Set("timestamp", fmt.Sprintf("%d", qctx.Query.GetTimestamp()))
 	args.Set("disable_compression", fmt.Sprintf("%v", sn.s.disableCompression))
+	args.Set("allow_partial_response", fmt.Sprintf("%v", qctx.AllowPartialResponse))
+
+	hiddenFieldsFilters, err := json.Marshal(qctx.HiddenFieldsFilters)
+	if err != nil {
+		logger.Panicf("BUG: cannot marshal HiddenFieldsFilters=%#v: %s", qctx.HiddenFieldsFilters, err)
+	}
+	args.Set("hidden_fields_filters", string(hiddenFieldsFilters))
+
 	return args
 }
 
@@ -288,6 +332,11 @@ func (sn *storageNode) getResponseBodyForPathAndArgs(ctx context.Context, path s
 	// send the request to the storage node
 	resp, err := sn.c.Do(req)
 	if err != nil {
+		// Wrap the error into httpserver.ErrorWithStatusCode in order to return the proper status code to the client.
+		// See https://github.com/VictoriaMetrics/VictoriaLogs/issues/576
+		//
+		// This is also used by isUnavailableBackendError() function in order to differentiate unavailable backend errors
+		// from improper configuration errors.
 		return nil, "", &httpserver.ErrorWithStatusCode{
 			Err:        fmt.Errorf("cannot connect to storage node at %q: %w", reqURL, err),
 			StatusCode: http.StatusBadGateway,
@@ -374,21 +423,12 @@ func (s *Storage) runQuery(stopCh <-chan struct{}, qctx *logstorage.QueryContext
 			err := sn.runQuery(qctxLocal, func(db *logstorage.DataBlock) {
 				writeBlock(uint(nodeIdx), db)
 			})
-			if err != nil {
-				if !errors.Is(err, context.Canceled) {
-					sn.sendErrors.Inc()
-				}
-
-				// Cancel the remaining parallel queries
-				cancel()
-			}
-
-			errs[nodeIdx] = err
+			errs[nodeIdx] = sn.handleError(ctxWithCancel, cancel, err, qctx.AllowPartialResponse)
 		}(i)
 	}
 	wg.Wait()
 
-	return getFirstNonCancelError(errs)
+	return getFirstError(errs, qctx.AllowPartialResponse)
 }
 
 // GetFieldNames executes qctx and returns field names seen in results.
@@ -447,6 +487,169 @@ func (s *Storage) GetStreamIDs(qctx *logstorage.QueryContext, limit uint64) ([]l
 	})
 }
 
+// DeleteRunTask starts deletion of logs for the given filter f at the given tenantIDs.
+func (s *Storage) DeleteRunTask(ctx context.Context, taskID string, timestamp int64, tenantIDs []logstorage.TenantID, f *logstorage.Filter) error {
+	ctxWithCancel, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	errs := make([]error, len(s.sns))
+
+	// Return an error to the caller when at least a single storage node is unavailable.
+	// This improves awarenes of the caller about unavailable storage nodes.
+	// If some storage node is unavailable, then the deletetion task
+	// can start on arbitrary number of the remaining available nodes.
+	// It is OK to re-run the delete task in this case.
+	allowPartialResponse := false
+
+	var wg sync.WaitGroup
+	for i := range s.sns {
+		wg.Add(1)
+		go func(nodeIdx int) {
+			defer wg.Done()
+
+			sn := s.sns[nodeIdx]
+			err := sn.deleteRunTask(ctxWithCancel, taskID, timestamp, tenantIDs, f)
+			errs[nodeIdx] = sn.handleError(ctxWithCancel, cancel, err, allowPartialResponse)
+		}(i)
+	}
+	wg.Wait()
+
+	return getFirstError(errs, allowPartialResponse)
+}
+
+// DeleteStopTask stops the delete task with the given taskID.
+func (s *Storage) DeleteStopTask(ctx context.Context, taskID string) error {
+	ctxWithCancel, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	errs := make([]error, len(s.sns))
+
+	// Return an error to the caller when at least a single storage node is unavailable.
+	// This improves awarenes of the caller about unavailable storage nodes.
+	// If some storage node is unavailable, then the deletion task can remain uncanceled on such nodes.
+	// It is OK to stop the delete task multiple times in this case.
+	allowPartialResponse := false
+
+	var wg sync.WaitGroup
+	for i := range s.sns {
+		wg.Add(1)
+		go func(nodeIdx int) {
+			defer wg.Done()
+
+			sn := s.sns[nodeIdx]
+			err := sn.deleteStopTask(ctxWithCancel, taskID)
+			errs[nodeIdx] = sn.handleError(ctxWithCancel, cancel, err, allowPartialResponse)
+		}(i)
+	}
+	wg.Wait()
+
+	return getFirstError(errs, allowPartialResponse)
+}
+
+// DeleteActiveTasks returns the list of active delete tasks started via DeleteRunTask
+func (s *Storage) DeleteActiveTasks(ctx context.Context) ([]*logstorage.DeleteTask, error) {
+	ctxWithCancel, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	errs := make([]error, len(s.sns))
+	results := make([][]*logstorage.DeleteTask, len(s.sns))
+
+	// Return an error to the caller when at least a single storage node is unavailable,
+	// since this prevents from returning the full list of active delete tasks.
+	allowPartialResponse := false
+
+	var wg sync.WaitGroup
+	for i := range s.sns {
+		wg.Add(1)
+		go func(nodeIdx int) {
+			defer wg.Done()
+
+			sn := s.sns[nodeIdx]
+			tasks, err := sn.deleteActiveTasks(ctxWithCancel)
+			results[nodeIdx] = tasks
+			errs[nodeIdx] = sn.handleError(ctxWithCancel, cancel, err, allowPartialResponse)
+		}(i)
+	}
+	wg.Wait()
+
+	if err := getFirstError(errs, allowPartialResponse); err != nil {
+		return nil, err
+	}
+
+	// Merge tasks received from storage nodes.
+	m := make(map[string]*logstorage.DeleteTask)
+	for _, tasks := range results {
+		for _, dt := range tasks {
+			dst := m[dt.TaskID]
+			if dst == nil {
+				m[dt.TaskID] = dt
+			}
+		}
+	}
+
+	tasks := make([]*logstorage.DeleteTask, 0, len(m))
+	for _, t := range m {
+		tasks = append(tasks, t)
+	}
+
+	return tasks, nil
+}
+
+// GetTenantIDs returns tenantIDs for the given start and end.
+func (s *Storage) GetTenantIDs(ctx context.Context, start, end int64) ([]logstorage.TenantID, error) {
+	return s.getTenantIDs(ctx, start, end)
+}
+
+func (s *Storage) getTenantIDs(ctx context.Context, start, end int64) ([]logstorage.TenantID, error) {
+	ctxWithCancel, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	results := make([][]logstorage.TenantID, len(s.sns))
+	errs := make([]error, len(s.sns))
+
+	// Return an error to the caller when at least a single storage node is unavailable,
+	// since this may result in incomplete list of the returned tenantIDs, which may mislead the caller.
+	allowPartialResponse := false
+
+	var wg sync.WaitGroup
+	for i := range s.sns {
+		wg.Add(1)
+		go func(nodeIdx int) {
+			defer wg.Done()
+
+			sn := s.sns[nodeIdx]
+			tenantIDs, err := sn.getTenantIDs(ctxWithCancel, start, end)
+			results[nodeIdx] = tenantIDs
+			errs[nodeIdx] = sn.handleError(ctxWithCancel, cancel, err, allowPartialResponse)
+
+			if err != nil {
+				// Cancel the remaining parallel requests
+				cancel()
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	if err := getFirstError(errs, allowPartialResponse); err != nil {
+		return nil, err
+	}
+
+	// Deduplicate tenantIDs
+	m := make(map[logstorage.TenantID]struct{})
+	for _, tenantIDs := range results {
+		for _, tenantID := range tenantIDs {
+			m[tenantID] = struct{}{}
+		}
+	}
+
+	tenantIDs := make([]logstorage.TenantID, 0, len(m))
+	for tenantID := range m {
+		tenantIDs = append(tenantIDs, tenantID)
+	}
+
+	return tenantIDs, nil
+}
+
 func (s *Storage) getValuesWithHits(qctx *logstorage.QueryContext, limit uint64, resetHitsOnLimitExceeded bool,
 	callback func(ctx context.Context, sn *storageNode) ([]logstorage.ValueWithHits, error)) ([]logstorage.ValueWithHits, error) {
 
@@ -465,21 +668,12 @@ func (s *Storage) getValuesWithHits(qctx *logstorage.QueryContext, limit uint64,
 			sn := s.sns[nodeIdx]
 			vhs, err := callback(ctxWithCancel, sn)
 			results[nodeIdx] = vhs
-			errs[nodeIdx] = err
-
-			if err != nil {
-				if !errors.Is(err, context.Canceled) {
-					sn.sendErrors.Inc()
-				}
-
-				// Cancel the remaining parallel requests
-				cancel()
-			}
+			errs[nodeIdx] = sn.handleError(ctxWithCancel, cancel, err, qctx.AllowPartialResponse)
 		}(i)
 	}
 	wg.Wait()
 
-	if err := getFirstNonCancelError(errs); err != nil {
+	if err := getFirstError(errs, qctx.AllowPartialResponse); err != nil {
 		return nil, err
 	}
 
@@ -488,13 +682,134 @@ func (s *Storage) getValuesWithHits(qctx *logstorage.QueryContext, limit uint64,
 	return vhs, nil
 }
 
-func getFirstNonCancelError(errs []error) error {
+func (sn *storageNode) deleteRunTask(ctx context.Context, taskID string, timestamp int64, tenantIDs []logstorage.TenantID, f *logstorage.Filter) error {
+	args := url.Values{}
+	args.Set("version", DeleteRunTaskProtocolVersion)
+	args.Set("task_id", taskID)
+	args.Set("timestamp", fmt.Sprintf("%d", timestamp))
+	args.Set("tenant_ids", string(logstorage.MarshalTenantIDsToJSON(tenantIDs)))
+	args.Set("filter", f.String())
+
+	path := "/internal/delete/run_task"
+	data, reqURL, err := sn.getPlainResponseBodyForPathAndArgs(ctx, path, args)
+	if err != nil {
+		return err
+	}
+	if len(data) > 0 {
+		return fmt.Errorf("unexpected response body received from %q: %q", reqURL, data)
+	}
+
+	return nil
+}
+
+func (sn *storageNode) deleteStopTask(ctx context.Context, taskID string) error {
+	args := url.Values{}
+	args.Set("version", DeleteStopTaskProtocolVersion)
+	args.Set("task_id", taskID)
+
+	path := "/internal/delete/stop_task"
+	data, reqURL, err := sn.getPlainResponseBodyForPathAndArgs(ctx, path, args)
+	if err != nil {
+		return err
+	}
+	if len(data) > 0 {
+		return fmt.Errorf("unexpected response body received from %q: %q", reqURL, data)
+	}
+
+	return nil
+}
+
+func (sn *storageNode) deleteActiveTasks(ctx context.Context) ([]*logstorage.DeleteTask, error) {
+	args := url.Values{}
+	args.Set("version", DeleteActiveTasksProtocolVersion)
+
+	path := "/internal/delete/active_tasks"
+	data, reqURL, err := sn.getPlainResponseBodyForPathAndArgs(ctx, path, args)
+	if err != nil {
+		return nil, err
+	}
+
+	tasks, err := logstorage.UnmarshalDeleteTasksFromJSON(data)
+	if err != nil {
+		return nil, fmt.Errorf("cannot parse response from %q: %w; response body: %q", reqURL, err, data)
+	}
+
+	return tasks, nil
+}
+
+func (sn *storageNode) getPlainResponseBodyForPathAndArgs(ctx context.Context, path string, args url.Values) ([]byte, string, error) {
+	responseBody, reqURL, err := sn.getResponseBodyForPathAndArgs(ctx, path, args)
+	if err != nil {
+		return nil, reqURL, err
+	}
+	defer responseBody.Close()
+
+	data, err := io.ReadAll(responseBody)
+	if err != nil {
+		return nil, reqURL, fmt.Errorf("cannot read response from %q: %w", reqURL, err)
+	}
+
+	return data, reqURL, nil
+}
+
+func (sn *storageNode) handleError(ctx context.Context, cancel func(), err error, allowPartialResponse bool) error {
+	if err == nil {
+		// Nothing to handle.
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		// The context error overrides all the other errors.
+		// It must be handled separately by the caller.
+		return nil
+	}
+
+	sn.sendErrors.Inc()
+
+	if !allowPartialResponse || !isUnavailableBackendError(err) {
+		// Cancel the remaining parallel queries, since the error must be returned to the client ASAP
+		// without waiting for the remaining parallel queries to other backends.
+		cancel()
+	}
+
+	return err
+}
+
+func getFirstError(errs []error, allowPartialResponse bool) error {
+	if len(errs) == 0 {
+		logger.Panicf("BUG: len(errs) must be bigger than 0")
+	}
+
+	if !allowPartialResponse {
+		for _, err := range errs {
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	// allowPartialResponse == true. Return the error only if all the backends are unavailable
+	// or if some of the backends are improperly configured.
 	for _, err := range errs {
-		if err != nil && !errors.Is(err, context.Canceled) {
-			return err
+		if err == nil {
+			// At least a single vlstorage returned full response.
+			return nil
+		}
+		if !isUnavailableBackendError(err) {
+			// Return the first error, which isn't related to the backend unavailability, to the client,
+			// since this error may point to configuration issues, which must be fixed ASAP.
+			// Hiding this error would complicate troubleshooting of improperly configured system.
+			return fmt.Errorf("the vlstorage node is available, but it returns an error, which may point to configuration issues: %w", err)
 		}
 	}
-	return nil
+
+	return fmt.Errorf("all the vlstorage nodes are unavailable for querying; a sample error: %w", errs[0])
+}
+
+func isUnavailableBackendError(err error) bool {
+	// It is expected that unavailable backend errors are wrapped into httpserver.ErrorWithStatusCode.
+	var es *httpserver.ErrorWithStatusCode
+	return errors.As(err, &es)
 }
 
 func unmarshalValuesWithHits(qctx *logstorage.QueryContext, src []byte) ([]logstorage.ValueWithHits, error) {

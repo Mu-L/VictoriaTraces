@@ -6,14 +6,17 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"time"
 
 	"github.com/VictoriaMetrics/VictoriaLogs/lib/logstorage"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/cgroup"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/flagutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fs"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/httpserver"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/httputil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/promauth"
 	"github.com/VictoriaMetrics/metrics"
@@ -27,11 +30,18 @@ var (
 	retentionPeriod = flagutil.NewRetentionDuration("retentionPeriod", "7d", "Trace spans with timestamps older than now-retentionPeriod are automatically deleted; "+
 		"trace spans with timestamps outside the retention are also rejected during data ingestion; the minimum supported retention is 1d (one day); "+
 		"see https://docs.victoriametrics.com/victoriatraces/#retention ; see also -retention.maxDiskSpaceUsageBytes and -retention.maxDiskUsagePercent")
+
+	defaultParallelReaders = flag.Int("defaultParallelReaders", 2*cgroup.AvailableCPUs(), "Default number of parallel data readers to use for executing every query; "+
+		"higher number of readers may help increasing query performance on high-latency storage such as NFS or S3 at the cost of higher RAM usage; "+
+		"see https://docs.victoriametrics.com/victorialogs/logsql/#parallel_readers-query-option")
+
 	maxDiskSpaceUsageBytes = flagutil.NewBytes("retention.maxDiskSpaceUsageBytes", 0, "The maximum disk space usage at -storageDataPath before older per-day "+
 		"partitions are automatically dropped; see https://docs.victoriametrics.com/victoriatraces/#retention-by-disk-space-usage ; see also -retentionPeriod")
 	maxDiskUsagePercent = flag.Int("retention.maxDiskUsagePercent", 0, "The maximum allowed disk usage percentage (1-100) for the filesystem that contains -storageDataPath before older per-day partitions are automatically dropped; mutually exclusive with -retention.maxDiskSpaceUsageBytes; see https://docs.victoriametrics.com/victoriatraces/#retention-by-disk-space-usage-percent")
 	futureRetention     = flagutil.NewRetentionDuration("futureRetention", "2d", "Log entries with timestamps bigger than now+futureRetention are rejected during data ingestion; "+
 		"see https://docs.victoriametrics.com/victoriatraces/#retention")
+	maxBackfillAge = flagutil.NewRetentionDuration("maxBackfillAge", "0", "Trace spans with timestamps older than now-maxBackfillAge are rejected during data ingestion; "+
+		"see https://docs.victoriametrics.com/victorialogs/#backfilling")
 	storageDataPath = flag.String("storageDataPath", "victoria-traces-data", "Path to directory where to store VictoriaTraces data; "+
 		"see https://docs.victoriametrics.com/victoriatraces/#storage")
 	inmemoryDataFlushInterval = flag.Duration("inmemoryDataFlushInterval", 5*time.Second, "The interval for guaranteed saving of in-memory data to disk. "+
@@ -45,6 +55,8 @@ var (
 	minFreeDiskSpaceBytes = flagutil.NewBytes("storage.minFreeDiskSpaceBytes", 10e6, "The minimum free disk space at -storageDataPath after which "+
 		"the storage stops accepting new data")
 
+	logNewStreamsAuthKey = flagutil.NewPassword("logNewStreamsAuthKey", "authKey, which must be passed in query string to /internal/log_new_streams . It overrides -httpAuth.* . "+
+		"See https://docs.victoriametrics.com/victorialogs/#logging-new-streams")
 	forceMergeAuthKey = flagutil.NewPassword("forceMergeAuthKey", "authKey, which must be passed in query string to /internal/force_merge . It overrides -httpAuth.* . "+
 		"See https://docs.victoriametrics.com/victoriatraces/#forced-merge")
 	forceFlushAuthKey = flagutil.NewPassword("forceFlushAuthKey", "authKey, which must be passed in query string to /internal/force_flush . It overrides -httpAuth.* . "+
@@ -62,6 +74,8 @@ var (
 		"Disabled compression reduces CPU usage at the cost of higher network usage")
 
 	storageNodeUsername     = flagutil.NewArrayString("storageNode.username", "Optional basic auth username to use for the corresponding -storageNode")
+	storageNodeUsernameFile = flagutil.NewArrayString("storageNode.usernameFile", "Optional path to basic auth username to use for the corresponding -storageNode. "+
+		"The file is re-read every second")
 	storageNodePassword     = flagutil.NewArrayString("storageNode.password", "Optional basic auth password to use for the corresponding -storageNode")
 	storageNodePasswordFile = flagutil.NewArrayString("storageNode.passwordFile", "Optional path to basic auth password to use for the corresponding -storageNode. "+
 		"The file is re-read every second")
@@ -116,10 +130,12 @@ func initLocalStorage() {
 	}
 	cfg := &logstorage.StorageConfig{
 		Retention:              retentionPeriod.Duration(),
+		DefaultParallelReaders: *defaultParallelReaders,
 		MaxDiskSpaceUsageBytes: maxDiskSpaceUsageBytes.N,
 		MaxDiskUsagePercent:    *maxDiskUsagePercent,
 		FlushInterval:          *inmemoryDataFlushInterval,
 		FutureRetention:        futureRetention.Duration(),
+		MaxBackfillAge:         maxBackfillAge.Duration(),
 		LogNewStreams:          *logNewStreams,
 		LogIngestedRows:        *logIngestedRows,
 		MinFreeDiskSpaceBytes:  minFreeDiskSpaceBytes.N,
@@ -166,12 +182,14 @@ func initNetworkStorage() {
 
 func newAuthConfigForStorageNode(argIdx int) *promauth.Config {
 	username := storageNodeUsername.GetOptionalArg(argIdx)
+	usernameFile := storageNodeUsernameFile.GetOptionalArg(argIdx)
 	password := storageNodePassword.GetOptionalArg(argIdx)
 	passwordFile := storageNodePasswordFile.GetOptionalArg(argIdx)
 	var basicAuthCfg *promauth.BasicAuthConfig
-	if username != "" || password != "" || passwordFile != "" {
+	if username != "" || usernameFile != "" || password != "" || passwordFile != "" {
 		basicAuthCfg = &promauth.BasicAuthConfig{
 			Username:     username,
+			UsernameFile: usernameFile,
 			Password:     promauth.NewSecret(password),
 			PasswordFile: passwordFile,
 		}
@@ -223,6 +241,8 @@ func Stop() {
 func RequestHandler(w http.ResponseWriter, r *http.Request) bool {
 	path := r.URL.Path
 	switch path {
+	case "/internal/log_new_streams":
+		return processLogNewStreams(w, r)
 	case "/internal/force_merge":
 		return processForceMerge(w, r)
 	case "/internal/force_flush":
@@ -239,6 +259,29 @@ func RequestHandler(w http.ResponseWriter, r *http.Request) bool {
 		return processPartitionSnapshotList(w, r)
 	}
 	return false
+}
+
+func processLogNewStreams(w http.ResponseWriter, r *http.Request) bool {
+	if localStorage == nil {
+		// logging of new streams is available only at local storage
+		return false
+	}
+
+	if !httpserver.CheckAuthFlag(w, r, logNewStreamsAuthKey) {
+		return true
+	}
+
+	seconds, err := httputil.GetInt(r, "seconds")
+	if err != nil {
+		httpserver.Errorf(w, r, "cannot parse 'seconds' query arg: %s", err)
+		return true
+	}
+	if seconds <= 0 {
+		seconds = 10
+	}
+
+	localStorage.EnableLogNewStreams(seconds)
+	return true
 }
 
 func processForceMerge(w http.ResponseWriter, r *http.Request) bool {
@@ -505,11 +548,48 @@ func GetStreamIDs(qctx *logstorage.QueryContext, limit uint64) ([]logstorage.Val
 	return netstorageSelect.GetStreamIDs(qctx, limit)
 }
 
-func GetTenantIDsByTimeRange(ctx context.Context, startTime, endTime int64) ([]logstorage.TenantID, error) {
-	if localStorage == nil {
-		return nil, nil
+// DeleteRunTask starts deletion of logs for the given filter f for the given tenantIDs.
+//
+// The taskID and timestamp are tracked in the list of tasks returned by DeleteActiveTasks().
+func DeleteRunTask(ctx context.Context, taskID string, timestamp int64, tenantIDs []logstorage.TenantID, f *logstorage.Filter) error {
+	logger.Infof("starting deleting logs for task_id=%q, filter=%q, tenantIDs=%s", taskID, f, tenantIDs)
+
+	if localStorage != nil {
+		return localStorage.DeleteRunTask(ctx, taskID, timestamp, tenantIDs, f)
 	}
-	return localStorage.GetTenantIDs(ctx, startTime, endTime)
+	return netstorageSelect.DeleteRunTask(ctx, taskID, timestamp, tenantIDs, f)
+}
+
+// DeleteStopTask stops delete task with the given taskID.
+func DeleteStopTask(ctx context.Context, taskID string) error {
+	logger.Infof("stopping delete task with task_id=%q", taskID)
+
+	var err error
+	if localStorage != nil {
+		err = localStorage.DeleteStopTask(ctx, taskID)
+	} else {
+		err = netstorageSelect.DeleteStopTask(ctx, taskID)
+	}
+	if err == nil {
+		logger.Infof("the delete task with task_id=%q has been stopped", taskID)
+	}
+	return err
+}
+
+// DeleteActiveTasks returns a list of active deletion tasks started via DeleteRunTask().
+func DeleteActiveTasks(ctx context.Context) ([]*logstorage.DeleteTask, error) {
+	if localStorage != nil {
+		return localStorage.DeleteActiveTasks(ctx)
+	}
+	return netstorageSelect.DeleteActiveTasks(ctx)
+}
+
+// GetTenantIDs returns tenantIDs from the storage by the given start and end.
+func GetTenantIDs(ctx context.Context, start, end int64) ([]logstorage.TenantID, error) {
+	if localStorage != nil {
+		return localStorage.GetTenantIDs(ctx, start, end)
+	}
+	return netstorageSelect.GetTenantIDs(ctx, start, end)
 }
 
 func writeStorageMetrics(w io.Writer, strg *logstorage.Storage) {
@@ -578,6 +658,13 @@ func writeStorageMetrics(w io.Writer, strg *logstorage.Storage) {
 	metrics.WriteGaugeUint64(w, `vt_uncompressed_data_size_bytes{type="storage/inmemory"}`, ss.UncompressedInmemorySize)
 	metrics.WriteGaugeUint64(w, `vt_uncompressed_data_size_bytes{type="storage/small"}`, ss.UncompressedSmallPartSize)
 	metrics.WriteGaugeUint64(w, `vt_uncompressed_data_size_bytes{type="storage/big"}`, ss.UncompressedBigPartSize)
+
+	if ss.MinTimestamp != math.MinInt64 {
+		metrics.WriteGaugeFloat64(w, `vt_storage_log_min_timestamp_seconds`, float64(ss.MinTimestamp/1e9))
+	}
+	if ss.MaxTimestamp != math.MaxInt64 {
+		metrics.WriteGaugeFloat64(w, `vt_storage_log_max_timestamp_seconds`, float64(ss.MaxTimestamp/1e9))
+	}
 
 	metrics.WriteCounterUint64(w, `vt_rows_dropped_total{reason="too_big_timestamp"}`, ss.RowsDroppedTooBigTimestamp)
 	metrics.WriteCounterUint64(w, `vt_rows_dropped_total{reason="too_small_timestamp"}`, ss.RowsDroppedTooSmallTimestamp)

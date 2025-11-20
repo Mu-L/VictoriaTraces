@@ -2,6 +2,7 @@ package logsql
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -34,9 +35,73 @@ var (
 		"Queries with bigger time ranges are rejected. See https://docs.victoriametrics.com/victorialogs/querying/#resource-usage-limits")
 
 	allowPartialResponseFlag = flag.Bool("search.allowPartialResponse", false, "Whether to allow returning partial responses when some of vtstorage nodes "+
-		"from the -storageNode list are unavailable for querying. This flag works only for cluster setup of VictoriaTraces. "+
+		"from the -storageNode list are unavailable for querying. This flag works only for cluster setup of VictoriaLogs. "+
 		"See https://docs.victoriametrics.com/victorialogs/querying/#partial-responses")
 )
+
+// ProcessQueryTimeRangeRequest handles /select/logsql/query_time_range request.
+//
+// This request returns JSON object with "start" and "end" fields containing
+// the really selected time range by the provided query in RFC3339Nano format.
+// This is needed for https://github.com/VictoriaMetrics/VictoriaLogs/issues/558#issuecomment-3527811816
+//
+// The format of the returned JSON:
+//
+//	{
+//	  "start":"YYYY-MM-DDThh:mm:sss.nnnnnnnnnZ",
+//	  "end":"YYYY-MM-DDThh:mm:sss.nnnnnnnnnZ",
+//	}
+func ProcessQueryTimeRangeRequest(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	minTimestamp, maxTimestamp, err := parseQueryTimeRangeArgs(r)
+	if err != nil {
+		httpserver.Errorf(w, r, "%s", err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	startStr := timestampToRFC3339Nano(minTimestamp)
+	endStr := timestampToRFC3339Nano(maxTimestamp)
+	fmt.Fprintf(w, `{"start":%q,"end":%q}`, startStr, endStr)
+}
+
+func parseQueryTimeRangeArgs(r *http.Request) (int64, int64, error) {
+	qStr := r.FormValue("query")
+	if qStr == "" {
+		return 0, 0, fmt.Errorf("`query` arg cannot be empty")
+	}
+	currTimestamp := time.Now().UnixNano()
+	q, err := logstorage.ParseQueryAtTimestamp(qStr, currTimestamp)
+	if err != nil {
+		return 0, 0, fmt.Errorf("cannot parse query [%s]: %s", qStr, err)
+	}
+
+	minTimestamp, maxTimestamp := q.GetFilterTimeRange()
+	if minTimestamp == math.MinInt64 {
+		start, ok, err := getTimeNsec(r, "start")
+		if err != nil {
+			return 0, 0, err
+		}
+		if ok {
+			minTimestamp = start
+		}
+	}
+	if maxTimestamp == math.MaxInt64 {
+		end, ok, err := getTimeNsec(r, "end")
+		if err != nil {
+			return 0, 0, err
+		}
+		if ok {
+			maxTimestamp = end
+		}
+	}
+
+	return minTimestamp, maxTimestamp, nil
+}
+
+func timestampToRFC3339Nano(nsec int64) string {
+	return time.Unix(0, nsec).UTC().Format(time.RFC3339Nano)
+}
 
 // ProcessFacetsRequest handles /select/logsql/facets request.
 //
@@ -245,11 +310,6 @@ func ProcessHitsRequest(ctx context.Context, w http.ResponseWriter, r *http.Requ
 
 	h.Set("Content-Type", "application/json")
 	writeRequestDuration(h, startTime)
-
-	// The VL-Selected-Time-Range contains the time range specified in the query, not counting (start, end) and extra_filters
-	// It is used by the built-in web UI in order to adjust the selected time range.
-	// See https://github.com/VictoriaMetrics/VictoriaLogs/issues/558#issuecomment-3180070712
-	h.Set("VL-Selected-Time-Range", ca.getSelectedTimeRange())
 
 	// Write response
 	WriteHitsSeries(w, m)
@@ -550,14 +610,14 @@ func ProcessStreamsRequest(ctx context.Context, w http.ResponseWriter, r *http.R
 	WriteValuesWithHitsJSON(w, streams)
 }
 
-// ProcessLiveTailRequest processes live tailing request to /select/logsql/tail
+// ProcessLiveTailRequest processes live tailing request to /select/logsq/tail
 //
 // See https://docs.victoriametrics.com/victorialogs/querying/#live-tailing
 func ProcessLiveTailRequest(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	liveTailRequests.Inc()
 	defer liveTailRequests.Dec()
 
-	ca, err := parseCommonArgs(r)
+	ca, err := parseCommonArgsWithConfig(r, true)
 	if err != nil {
 		httpserver.Errorf(w, r, "%s", err)
 		return
@@ -639,7 +699,7 @@ func ProcessLiveTailRequest(ctx context.Context, w http.ResponseWriter, r *http.
 	}
 }
 
-var liveTailRequests = metrics.NewCounter(`vt_live_tailing_requests`)
+var liveTailRequests = metrics.NewCounter(`vl_live_tailing_requests`)
 
 const tailOffsetNsecs = 5e9
 
@@ -880,11 +940,6 @@ func ProcessStatsQueryRangeRequest(ctx context.Context, w http.ResponseWriter, r
 	h.Set("Content-Type", "application/json")
 	writeRequestDuration(h, startTime)
 
-	// The VL-Selected-Time-Range contains the time range specified in the query, not counting (start, end) and extra_filters
-	// It is used by the built-in web UI in order to adjust the selected time range.
-	// See https://github.com/VictoriaMetrics/VictoriaLogs/issues/558#issuecomment-3180070712
-	h.Set("VL-Selected-Time-Range", ca.getSelectedTimeRange())
-
 	// Write response
 	WriteStatsQueryRangeResponse(w, rows)
 }
@@ -1073,6 +1128,65 @@ func ProcessQueryRequest(ctx context.Context, w http.ResponseWriter, r *http.Req
 	writeResponseHeadersOnce()
 }
 
+// ProcessTenantIDsRequest processes /select/tenant_ids request.
+func ProcessTenantIDsRequest(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	accountID := r.Header.Get("AccountID")
+	if accountID != "" {
+		// Security measure - prevent from requesting tenant_ids for requests with the already specified tenant.
+		// This allows enforcing the needed tenants at vmauth side, so they won't have access to /select/tenant_ids endpoint.
+		// See https://docs.victoriametrics.com/victoriametrics/vmauth/#modifying-http-headers
+		httpserver.Errorf(w, r, "The /select/tenant_ids endpoint cannot be requested with non-empty AccountID=%q header", accountID)
+		return
+	}
+
+	start, okStart, err := getTimeNsec(r, "start")
+	if err != nil {
+		httpserver.Errorf(w, r, "%s", err)
+		return
+	}
+	end, okEnd, err := getTimeNsec(r, "end")
+	if err != nil {
+		httpserver.Errorf(w, r, "%s", err)
+		return
+	}
+	if !okStart {
+		start = math.MinInt64
+	}
+	if !okEnd {
+		end = math.MaxInt64
+	} else {
+		// Treat HTTP 'end' query arg as exclusive: [start, end)
+		// Convert to inclusive bound for internal filter by subtracting 1ns.
+		if end != math.MinInt64 {
+			end--
+		}
+	}
+
+	if start > end {
+		httpserver.Errorf(w, r, "'start=%d' must be smaller than 'end=%d'", start, end)
+		return
+	}
+
+	tenants, err := vtstorage.GetTenantIDs(ctx, start, end)
+	if err != nil {
+		httpserver.Errorf(w, r, "cannot obtain tenantIDs: %s", err)
+		return
+	}
+
+	data, err := json.Marshal(tenants)
+	if err != nil {
+		httpserver.Errorf(w, r, "cannot marshal tenantIDs to JSON: %s", err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	if _, err := w.Write(data); err != nil {
+		httpserver.Errorf(w, r, "cannot send response to the client: %s", err)
+		return
+	}
+}
+
 type syncWriter struct {
 	mu sync.Mutex
 	w  io.Writer
@@ -1110,32 +1224,30 @@ type commonArgs struct {
 	// tenantIDs is the list of tenantIDs to query.
 	tenantIDs []logstorage.TenantID
 
-	// Whether to allow partial response when some of vlstorage nodes are unavailable for querying.
-	// This option makes sense only for cluster setup when vlselect queries vlstorage nodes.
+	// Whether to allow partial response when some of vtstorage nodes are unavailable for querying.
+	// This option makes sense only for cluster setup when vlselect queries vtstorage nodes.
 	allowPartialResponse bool
 
-	// minTimestamp and maxTimestamp is the time range specified in the original query,
-	// without taking into account extra_filters and (start, end) query args.
-	minTimestamp int64
-	maxTimestamp int64
+	// Optional fields and field prefixes to hide during query execution.
+	hiddenFieldsFilters []string
 
 	// qs contains query execution statistics.
 	qs logstorage.QueryStats
 }
 
 func (ca *commonArgs) newQueryContext(ctx context.Context) *logstorage.QueryContext {
-	return logstorage.NewQueryContext(ctx, &ca.qs, ca.tenantIDs, ca.q, ca.allowPartialResponse)
+	return logstorage.NewQueryContext(ctx, &ca.qs, ca.tenantIDs, ca.q, ca.allowPartialResponse, ca.hiddenFieldsFilters)
 }
 
 func (ca *commonArgs) updatePerQueryStatsMetrics() {
 	vtstorage.UpdatePerQueryStatsMetrics(&ca.qs)
 }
 
-func (ca *commonArgs) getSelectedTimeRange() string {
-	return fmt.Sprintf("[%d,%d]", ca.minTimestamp, ca.maxTimestamp)
+func parseCommonArgs(r *http.Request) (*commonArgs, error) {
+	return parseCommonArgsWithConfig(r, false)
 }
 
-func parseCommonArgs(r *http.Request) (*commonArgs, error) {
+func parseCommonArgsWithConfig(r *http.Request, skipMaxRangeCheck bool) (*commonArgs, error) {
 	// Extract tenantID
 	tenantID, err := logstorage.GetTenantIDFromRequest(r)
 	if err != nil {
@@ -1169,13 +1281,14 @@ func parseCommonArgs(r *http.Request) (*commonArgs, error) {
 	// to the first nanosecond at the next period of time (month, week, day, hour, etc.)
 	timestamp--
 
+	currTimestamp := time.Now().UnixNano()
 	if !timeOK {
 		// If time arg is missing, then evaluate query either at the end timestamp (if it is set)
 		// or at the current timestamp (if end query arg isn't set)
 		if endOK {
 			timestamp = end
 		} else {
-			timestamp = time.Now().UnixNano()
+			timestamp = currTimestamp
 		}
 	}
 
@@ -1185,8 +1298,6 @@ func parseCommonArgs(r *http.Request) (*commonArgs, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cannot parse query [%s]: %s", qStr, err)
 	}
-
-	minTimestamp, maxTimestamp := q.GetFilterTimeRange()
 
 	if startOK || endOK {
 		// Add _time:[start, end] filter if start or end args were set.
@@ -1217,16 +1328,7 @@ func parseCommonArgs(r *http.Request) (*commonArgs, error) {
 		q.AddExtraFilters(extraStreamFilters)
 	}
 
-	if minTimestamp == math.MinInt64 || maxTimestamp == math.MaxInt64 {
-		// The original time range is open-bounded.
-		// Override it with the (start, end) time range in this case.
-		minTimestamp, maxTimestamp = q.GetFilterTimeRange()
-		if maxTimestamp == math.MaxInt64 {
-			maxTimestamp = timestamp
-		}
-	}
-
-	if maxRange := maxQueryTimeRange.Duration(); maxRange > 0 {
+	if maxRange := maxQueryTimeRange.Duration(); maxRange > 0 && !skipMaxRangeCheck {
 		start, end := q.GetFilterTimeRange()
 		if end > start {
 			queryTimeRange := end - start
@@ -1243,14 +1345,17 @@ func parseCommonArgs(r *http.Request) (*commonArgs, error) {
 		return nil, err
 	}
 
+	hiddenFieldsFilters, err := getStringSliceFromRequest(r, "hidden_fields_filters")
+	if err != nil {
+		return nil, err
+	}
+
 	ca := &commonArgs{
 		q:         q,
 		tenantIDs: tenantIDs,
 
 		allowPartialResponse: allowPartialResponse,
-
-		minTimestamp: minTimestamp,
-		maxTimestamp: maxTimestamp,
+		hiddenFieldsFilters:  hiddenFieldsFilters,
 	}
 	return ca, nil
 }
@@ -1407,6 +1512,26 @@ func getBoolFromRequest(dst *bool, r *http.Request, argName string) error {
 	}
 	*dst = b
 	return nil
+}
+
+func getStringSliceFromRequest(r *http.Request, argName string) ([]string, error) {
+	s := r.FormValue(argName)
+	if s == "" {
+		return nil, nil
+	}
+
+	if strings.HasPrefix(s, "[") {
+		// Parse as a JSON array of strings.
+		var a []string
+		if err := json.Unmarshal([]byte(s), &a); err != nil {
+			return nil, fmt.Errorf("cannot unmarshal JSON array from %s=%q: %w", argName, s, err)
+		}
+		return a, nil
+	}
+
+	// Parse as a comma-separated list of strings
+	a := strings.Split(s, ",")
+	return a, nil
 }
 
 func writeRequestDuration(h http.Header, startTime time.Time) {

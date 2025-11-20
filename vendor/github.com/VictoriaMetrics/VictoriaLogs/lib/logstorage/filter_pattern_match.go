@@ -118,6 +118,11 @@ func (fp *filterPatternMatch) initTokens() {
 	fp.tokensHashes = appendTokensHashes(nil, fp.tokens)
 }
 
+func (fp *filterPatternMatch) matchRow(fields []Field) bool {
+	v := getFieldValueByName(fields, fp.fieldName)
+	return fp.pm.Match(v)
+}
+
 func (fp *filterPatternMatch) applyToBlockResult(br *blockResult, bm *bitmap) {
 	c := br.getColumnByName(fp.fieldName)
 	if c.isConst {

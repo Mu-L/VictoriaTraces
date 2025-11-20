@@ -74,7 +74,7 @@ func GenerateServiceGraphTimeRange(ctx context.Context) {
 	endTime := time.Now().Truncate(*serviceGraphTaskInterval)
 	startTime := endTime.Add(-*serviceGraphTaskLookbehind)
 
-	tenantIDs, err := vtstorage.GetTenantIDsByTimeRange(ctx, startTime.UnixNano(), endTime.UnixNano())
+	tenantIDs, err := vtstorage.GetTenantIDs(ctx, startTime.UnixNano(), endTime.UnixNano())
 	if err != nil {
 		logger.Errorf("cannot get tenant ids: %s", err)
 		return

@@ -33,6 +33,11 @@ func (fr *filterWeekRange) updateNeededFields(pf *prefixfilter.Filter) {
 	pf.AddAllowFilter("_time")
 }
 
+func (fr *filterWeekRange) matchRow(fields []Field) bool {
+	v := getFieldValueByName(fields, "_time")
+	return fr.matchTimestampString(v)
+}
+
 func (fr *filterWeekRange) applyToBlockResult(br *blockResult, bm *bitmap) {
 	if fr.startDay > fr.endDay || fr.startDay > time.Saturday || fr.endDay < time.Monday {
 		bm.resetBits()

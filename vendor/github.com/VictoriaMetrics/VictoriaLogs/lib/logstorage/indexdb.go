@@ -144,6 +144,26 @@ func (idb *indexdb) updateStats(d *IndexdbStats) {
 	d.IndexdbInmemoryItemsMerged += tm.InmemoryItemsMerged
 }
 
+func (idb *indexdb) appendStreamString(dst []byte, sid *streamID) []byte {
+	dstLen := len(dst)
+	dst = idb.appendStreamTagsByStreamID(dst, sid)
+	if len(dst) == dstLen {
+		// Couldn't find stream tags by sid. This may be the case when the corresponding log stream
+		// was recently registered and its tags aren't visible to search yet.
+		// The stream tags must become visible in a few seconds.
+		// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/6042
+		return dst
+	}
+
+	st := GetStreamTags()
+	streamTagsCanonical := bytesutil.ToUnsafeString(dst[dstLen:])
+	mustUnmarshalStreamTags(st, streamTagsCanonical)
+	dst = st.marshalString(dst[:dstLen])
+	PutStreamTags(st)
+
+	return dst
+}
+
 func (idb *indexdb) appendStreamTagsByStreamID(dst []byte, sid *streamID) []byte {
 	is := idb.getIndexSearch()
 	defer idb.putIndexSearch(is)

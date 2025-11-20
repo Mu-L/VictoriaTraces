@@ -2,6 +2,7 @@ package internalselect
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -283,14 +284,21 @@ type commonParams struct {
 	TenantIDs []logstorage.TenantID
 	Query     *logstorage.Query
 
+	// Whether to disable compression of the response sent to the vtselect.
 	DisableCompression bool
+
+	// Whether to allow partial response when some of vtstorage nodes are unavailable.
+	AllowPartialResponse bool
+
+	// Optional list of log fields or log field prefixes ending with *, which must be hidden during query execution.
+	HiddenFieldsFilters []string
 
 	// qs contains execution statistics for the Query.
 	qs logstorage.QueryStats
 }
 
 func (cp *commonParams) NewQueryContext(ctx context.Context) *logstorage.QueryContext {
-	return logstorage.NewQueryContext(ctx, &cp.qs, cp.TenantIDs, cp.Query, false)
+	return logstorage.NewQueryContext(ctx, &cp.qs, cp.TenantIDs, cp.Query, cp.AllowPartialResponse, cp.HiddenFieldsFilters)
 }
 
 func (cp *commonParams) UpdatePerQueryStatsMetrics() {
@@ -298,13 +306,12 @@ func (cp *commonParams) UpdatePerQueryStatsMetrics() {
 }
 
 func getCommonParams(r *http.Request, expectedProtocolVersion string) (*commonParams, error) {
-	version := r.FormValue("version")
-	if version != expectedProtocolVersion {
-		return nil, fmt.Errorf("unexpected version=%q; want %q", version, expectedProtocolVersion)
+	if err := checkProtocolVersion(r, expectedProtocolVersion); err != nil {
+		return nil, err
 	}
 
 	tenantIDsStr := r.FormValue("tenant_ids")
-	tenantIDs, err := logstorage.UnmarshalTenantIDs([]byte(tenantIDsStr))
+	tenantIDs, err := logstorage.UnmarshalTenantIDsFromJSON([]byte(tenantIDsStr))
 	if err != nil {
 		return nil, fmt.Errorf("cannot unmarshal tenant_ids=%q: %w", tenantIDsStr, err)
 	}
@@ -320,10 +327,19 @@ func getCommonParams(r *http.Request, expectedProtocolVersion string) (*commonPa
 		return nil, fmt.Errorf("cannot unmarshal query=%q: %w", qStr, err)
 	}
 
-	s := r.FormValue("disable_compression")
-	disableCompression, err := strconv.ParseBool(s)
+	disableCompression, err := getBoolFromRequest(r, "disable_compression")
 	if err != nil {
-		return nil, fmt.Errorf("cannot parse disable_compression=%q: %w", s, err)
+		return nil, err
+	}
+
+	allowPartialResponse, err := getBoolFromRequest(r, "allow_partial_response")
+	if err != nil {
+		return nil, err
+	}
+
+	hiddenFieldsFilters, err := getStringSliceFromRequest(r, "hidden_fields_filters")
+	if err != nil {
+		return nil, err
 	}
 
 	cp := &commonParams{
@@ -331,8 +347,20 @@ func getCommonParams(r *http.Request, expectedProtocolVersion string) (*commonPa
 		Query:     q,
 
 		DisableCompression: disableCompression,
+
+		AllowPartialResponse: allowPartialResponse,
+		HiddenFieldsFilters:  hiddenFieldsFilters,
 	}
 	return cp, nil
+}
+
+func checkProtocolVersion(r *http.Request, expectedProtocolVersion string) error {
+	version := r.FormValue("version")
+	if version != expectedProtocolVersion {
+		return fmt.Errorf("unexpected protocol version=%q; want %q; the most likely casue of this error is different versions of VictoriaLogs cluster components; "+
+			"make sure VictoriaLogs compoments have the same release version", version, expectedProtocolVersion)
+	}
+	return nil
 }
 
 func writeValuesWithHits(w http.ResponseWriter, qctx *logstorage.QueryContext, vhs []logstorage.ValueWithHits, disableCompression bool) error {
@@ -374,4 +402,31 @@ func getInt64FromRequest(r *http.Request, argName string) (int64, error) {
 		return 0, fmt.Errorf("cannot parse %s=%q: %w", argName, s, err)
 	}
 	return n, nil
+}
+
+func getBoolFromRequest(r *http.Request, argName string) (bool, error) {
+	s := r.FormValue(argName)
+	if s == "" {
+		return false, fmt.Errorf("missing the required arg %s", argName)
+	}
+	b, err := strconv.ParseBool(s)
+	if err != nil {
+		return false, fmt.Errorf("cannot parse %s=%q as bool: %w", argName, s, err)
+	}
+
+	return b, nil
+}
+
+func getStringSliceFromRequest(r *http.Request, argName string) ([]string, error) {
+	s := r.FormValue(argName)
+	if s == "" {
+		return nil, fmt.Errorf("missing the required arg %s", argName)
+	}
+
+	var a []string
+	if err := json.Unmarshal([]byte(s), &a); err != nil {
+		return nil, fmt.Errorf("cannot unmarshal JSON array from %s=%q: %w", argName, s, err)
+	}
+
+	return a, nil
 }
