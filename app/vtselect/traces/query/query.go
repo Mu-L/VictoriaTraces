@@ -490,7 +490,7 @@ func findTraceIDTimeSplitTimeRange(ctx context.Context, q *logstorage.Query, cp 
 		traceIDStartTime, _ := strconv.ParseInt(traceIDStartTimeStr, 10, 64)
 		traceIDEndTime, _ := strconv.ParseInt(traceIDEndTimeStr, 10, 64)
 
-		return time.Unix(traceIDStartTime/1000000000, traceIDStartTime%1000000000), time.Unix(traceIDEndTime/1000000000, traceIDEndTime%1000000000), nil
+		return time.Unix(traceIDStartTime/int64(time.Second), traceIDStartTime%int64(time.Second)), time.Unix(traceIDEndTime/int64(time.Second), traceIDEndTime%int64(time.Second)), nil
 	}
 	return time.Time{}, time.Time{}, vtstoragecommon.ErrOutOfRetention
 }
