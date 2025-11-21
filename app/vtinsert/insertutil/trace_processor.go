@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/VictoriaMetrics/VictoriaLogs/lib/logstorage"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/VictoriaMetrics/metrics"
 
 	otelpb "github.com/VictoriaMetrics/VictoriaTraces/lib/protoparser/opentelemetry/pb"
@@ -54,7 +55,14 @@ func (cp *CommonParams) NewTraceProcessor(protocolName string, isStreamMode bool
 // If streamFields is non-nil, then it is used as log stream fields instead of the pre-configured stream fields.
 func (tsp *traceSpanProcessor) AddRow(timestamp int64, fields, streamFields []logstorage.Field) {
 	if logRowsStorage.IsLocalStorage() {
-		tsp.pushTraceToIndexQueue(tsp.lmp.cp.TenantID, fields)
+		if !tsp.pushTraceToIndexQueue(tsp.lmp.cp.TenantID, fields) {
+			// This should not happen because:
+			// 1. AddRow is called by HTTP handler.
+			// 2. During shutdown, main HTTP server should be closed first, and then the index worker.
+			// 3. `false` only return when index worker is exited.
+			logger.Errorf("cannot push index for a trace to the queue: %v", fields)
+			return
+		}
 	}
 	tsp.lmp.AddRow(timestamp, fields, streamFields)
 }

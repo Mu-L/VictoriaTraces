@@ -403,6 +403,8 @@ func findTraceIDTimeSplitTimeRange(ctx context.Context, q *logstorage.Query, cp 
 	var (
 		missingTimeColumn                      atomic.Bool
 		traceIDStartTimeStr, traceIDEndTimeStr string
+		// for compatible with old data
+		timeStr string
 	)
 
 	ctxWithCancel, cancel := context.WithCancel(ctx)
@@ -434,6 +436,8 @@ func findTraceIDTimeSplitTimeRange(ctx context.Context, q *logstorage.Query, cp 
 
 		for _, c := range columns {
 			switch c.Name {
+			case "_time":
+				timeStr = c.Values[len(c.Values)-1]
 			case otelpb.TraceIDIndexStartTimeFieldName:
 				for _, v := range c.Values {
 					if traceIDStartTimeStr == "" || traceIDStartTimeStr > v {
@@ -467,13 +471,22 @@ func findTraceIDTimeSplitTimeRange(ctx context.Context, q *logstorage.Query, cp 
 		}
 
 		// no hit in this time range, continue with step.
-		if traceIDEndTimeStr == "" {
+		if timeStr == "" {
 			endTime = startTime
 			startTime = startTime.Add(-*traceSearchStep)
 			continue
 		}
 
-		// found result, perform extra search for traceMaxDurationWindow and then break.
+		// found result.
+		if traceIDStartTimeStr == "" || traceIDEndTimeStr == "" {
+			// this could be the old format index, which records trace ID and the approximate timestamp only.
+			// to transform this into new format (start time & end time), use [t-traceWindow, t+traceWindow].
+			// this code should be deprecated in the future.
+			timestamp, _ := strconv.ParseInt(timeStr, 10, 64)
+			return time.Unix(timestamp/int64(time.Second), timestamp%int64(time.Second)).Add(-*traceMaxDurationWindow),
+				time.Unix(timestamp/int64(time.Second), timestamp%int64(time.Second)).Add(*traceMaxDurationWindow), nil
+		}
+
 		traceIDStartTime, _ := strconv.ParseInt(traceIDStartTimeStr, 10, 64)
 		traceIDEndTime, _ := strconv.ParseInt(traceIDEndTimeStr, 10, 64)
 

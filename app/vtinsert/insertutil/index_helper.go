@@ -2,13 +2,15 @@ package insertutil
 
 import (
 	"flag"
-	"github.com/VictoriaMetrics/VictoriaLogs/lib/logstorage"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
-	otelpb "github.com/VictoriaMetrics/VictoriaTraces/lib/protoparser/opentelemetry/pb"
-	"github.com/cespare/xxhash/v2"
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/VictoriaMetrics/VictoriaLogs/lib/logstorage"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
+	"github.com/cespare/xxhash/v2"
+
+	otelpb "github.com/VictoriaMetrics/VictoriaTraces/lib/protoparser/opentelemetry/pb"
 )
 
 var (
@@ -20,93 +22,81 @@ type indexEntry struct {
 	tenantID      logstorage.TenantID
 	startTimeNano string
 	endTimeNano   string
-	addTime       uint64
 }
 
 var (
-	// traceIDIndexMapCur and traceIDIndexMapPrev holds the index data of a traceID before this index could be persisted.
-	// The cur map can accept new entries.
-	traceIDIndexMapCur = &sync.Map{}
-	// The prev map only serves for fast lookup of existing entries. Write operation can be performed on the *indexEntry,
-	// but not on the prev map.
+	// traceIDIndexMapCur and traceIDIndexMapPrev holds the index data *indexEntry for each traceID, before they could be persisted.
+	// it mainly tracks the start time and end time of a trace, which could be edited before they're persisted.
+	//
+	// - The cur map can accept new traceID and *indexEntry.
+	// - The prev map only serves for fast lookup of existing *indexEntry.
+	traceIDIndexMapCur  = &sync.Map{}
 	traceIDIndexMapPrev = &sync.Map{}
 
 	// logMessageProcessorMap holds lmp for different tenants.
 	logMessageProcessorMap = make(map[logstorage.TenantID]LogMessageProcessor)
 
-	stopCh = make(chan struct{})
+	// indexWorkerWg is the WaitGroup for IndexWorker. indexWorkerWg.Wait() should be used during shutdown.
+	indexWorkerWg = sync.WaitGroup{}
+	stopCh        = make(chan struct{})
 )
 
 // pushIndexToQueue organize index data (from LogMessageProcessor interface or InsertRowProcessor interface)
 // and push it to the queue.
 func pushIndexToQueue(tenantID logstorage.TenantID, traceID string, startTime, endTime string) bool {
-	index, ok := traceIDIndexMapCur.Load(traceID)
-	if ok {
-		idxEntry := index.(*indexEntry)
-		idxEntry.startTimeNano = min(idxEntry.startTimeNano, startTime)
-		idxEntry.endTimeNano = max(idxEntry.endTimeNano, endTime)
-		return true
+	select {
+	case <-stopCh:
+		// during stop, no data should be pushed to the queue anymore.
+		return false
+	default:
+		index, ok := traceIDIndexMapCur.Load(traceID)
+		if ok {
+			idxEntry := index.(*indexEntry)
+			idxEntry.startTimeNano = min(idxEntry.startTimeNano, startTime)
+			idxEntry.endTimeNano = max(idxEntry.endTimeNano, endTime)
+			return true
+		}
+
+		index, ok = traceIDIndexMapPrev.Load(traceID)
+		if ok {
+			idxEntry := index.(*indexEntry)
+			idxEntry.startTimeNano = min(idxEntry.startTimeNano, startTime)
+			idxEntry.endTimeNano = max(idxEntry.endTimeNano, endTime)
+			return true
+		}
+
+		idxEntry := &indexEntry{
+			tenantID:      tenantID,
+			startTimeNano: startTime,
+			endTimeNano:   endTime,
+		}
+
+		traceIDIndexMapCur.Store(traceID, idxEntry)
 	}
 
-	index, ok = traceIDIndexMapPrev.Load(traceID)
-	if ok {
-		idxEntry := index.(*indexEntry)
-		idxEntry.startTimeNano = min(idxEntry.startTimeNano, startTime)
-		idxEntry.endTimeNano = max(idxEntry.endTimeNano, endTime)
-		return true
-	}
-
-	idxEntry := &indexEntry{
-		tenantID:      tenantID,
-		startTimeNano: startTime,
-		endTimeNano:   endTime,
-		addTime:       fasttime.UnixTimestamp(),
-	}
-
-	traceIDIndexMapCur.Store(traceID, idxEntry)
 	return true
 }
 
 // MustStartIndexWorker starts a single goroutine worker that reads from traceIDCh and write the index entry to storage.
 func MustStartIndexWorker() {
+	indexWorkerWg.Add(1)
 	go func() {
+		defer indexWorkerWg.Done()
+
 		ticker := time.NewTicker(*traceMaxDuration / 2)
 		defer ticker.Stop()
 
 		for {
 			select {
 			case <-stopCh:
-				// todo finish traceIDCh before exit
+				// persist all the index in the queue,
+				// even though they're still fresh (haven't waited for *traceMaxDuration).
+				traceIDIndexMapPrev.Range(writeIndexInMap)
+				traceIDIndexMapCur.Range(writeIndexInMap)
+
 				return
 			case <-ticker.C:
-				traceIDIndexMapPrev.Range(func(traceID, index any) bool {
-					idxEntry := index.(*indexEntry)
-					lmp, ok := logMessageProcessorMap[idxEntry.tenantID]
-					if !ok {
-						// init the lmp for the current tenant
-						cp := CommonParams{
-							TenantID:   idxEntry.tenantID,
-							TimeFields: []string{"_time"},
-						}
-						lmp = cp.NewLogMessageProcessor("internalinsert_index", true)
-						logMessageProcessorMap[idxEntry.tenantID] = lmp
-					}
-
-					lmp.AddRow(int64(idxEntry.addTime)*1000000000,
-						// fields
-						[]logstorage.Field{
-							{Name: "_msg", Value: "-"},
-							{Name: otelpb.TraceIDIndexFieldName, Value: traceID.(string)},
-							{Name: otelpb.TraceIDIndexStartTimeFieldName, Value: idxEntry.startTimeNano},
-							{Name: otelpb.TraceIDIndexEndTimeFieldName, Value: idxEntry.endTimeNano},
-						},
-						// stream fields
-						[]logstorage.Field{
-							{Name: otelpb.TraceIDIndexStreamName, Value: strconv.FormatUint(xxhash.Sum64String(traceID.(string))%otelpb.TraceIDIndexPartitionCount, 10)},
-						},
-					)
-					return true
-				})
+				traceIDIndexMapPrev.Range(writeIndexInMap)
 
 				traceIDIndexMapPrev.Clear()
 				traceIDIndexMapCur, traceIDIndexMapPrev = traceIDIndexMapPrev, traceIDIndexMapCur
@@ -115,8 +105,50 @@ func MustStartIndexWorker() {
 	}()
 }
 
+// writeIndexInMap transform the
+func writeIndexInMap(traceID, index any) bool {
+	idxEntry := index.(*indexEntry)
+	lmp, ok := logMessageProcessorMap[idxEntry.tenantID]
+	if !ok {
+		// init the lmp for the current tenant
+		cp := CommonParams{
+			TenantID:   idxEntry.tenantID,
+			TimeFields: []string{"_time"},
+		}
+		lmp = cp.NewLogMessageProcessor("internalinsert_index", true)
+
+		// only current goroutine can read/write this map, so mutex is not needed.
+		// consider adding a mutex if index worker is scaled to multi-goroutines.
+		logMessageProcessorMap[idxEntry.tenantID] = lmp
+	}
+
+	indexTimestamp, err := strconv.ParseInt(idxEntry.startTimeNano, 10, 64)
+	if err != nil {
+		logger.Errorf("trace index: cannot parse start time %q to int64", idxEntry.startTimeNano)
+		return true
+	}
+	lmp.AddRow(indexTimestamp,
+		// fields
+		[]logstorage.Field{
+			{Name: "_msg", Value: "-"},
+			{Name: otelpb.TraceIDIndexFieldName, Value: traceID.(string)},
+			{Name: otelpb.TraceIDIndexStartTimeFieldName, Value: idxEntry.startTimeNano},
+			{Name: otelpb.TraceIDIndexEndTimeFieldName, Value: idxEntry.endTimeNano},
+		},
+		// stream fields
+		[]logstorage.Field{
+			{Name: otelpb.TraceIDIndexStreamName, Value: strconv.FormatUint(xxhash.Sum64String(traceID.(string))%otelpb.TraceIDIndexPartitionCount, 10)},
+		},
+	)
+	return true
+}
+
 func MustStopIndexWorker() {
 	close(stopCh)
+
+	// wait until all the index workers exit
+	indexWorkerWg.Wait()
+
 	for _, lmp := range logMessageProcessorMap {
 		lmp.MustClose()
 	}
