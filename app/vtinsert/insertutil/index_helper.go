@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	traceMaxDuration = flag.Duration("insert.traceMaxDuration", time.Minute, "Maximum duration for a trace. VictoriaTraces creates an index for each trace ID based on its start and end times."+
+	traceMaxDuration = flag.Duration("insert.traceMaxDuration", 30*time.Second, "Maximum duration for a trace. VictoriaTraces creates an index for each trace ID based on its start and end times."+
 		"Each trace ID must wait in the queue for -insert.traceMaxDuration, continuously updating its start and end times before being inserted into the index.")
 )
 
@@ -91,13 +91,18 @@ func MustStartIndexWorker() {
 			case <-stopCh:
 				// persist all the index in the queue,
 				// even though they're still fresh (haven't waited for *traceMaxDuration).
-				traceIDIndexMapPrev.Range(writeIndexInMap)
-				traceIDIndexMapCur.Range(writeIndexInMap)
+				traceIDIndexMapPrev.Range(flushIndexInMap)
+				traceIDIndexMapCur.Range(flushIndexInMap)
 
 				return
 			case <-ticker.C:
-				traceIDIndexMapPrev.Range(writeIndexInMap)
-
+				counter := 0
+				// flush the data in prev map
+				traceIDIndexMapPrev.Range(func(k, v any) bool {
+					counter++
+					return flushIndexInMap(k, v)
+				})
+				// swap the empty prev map as the new current map.
 				traceIDIndexMapPrev.Clear()
 				traceIDIndexMapCur, traceIDIndexMapPrev = traceIDIndexMapPrev, traceIDIndexMapCur
 			}
@@ -105,8 +110,8 @@ func MustStartIndexWorker() {
 	}()
 }
 
-// writeIndexInMap transform the
-func writeIndexInMap(traceID, index any) bool {
+// flushIndexInMap flush the in-memory index to log streams.
+func flushIndexInMap(traceID, index any) bool {
 	idxEntry := index.(*indexEntry)
 	lmp, ok := logMessageProcessorMap[idxEntry.tenantID]
 	if !ok {

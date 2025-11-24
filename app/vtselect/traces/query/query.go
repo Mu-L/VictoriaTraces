@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/VictoriaMetrics/VictoriaLogs/lib/logstorage"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/cespare/xxhash/v2"
 
 	"github.com/VictoriaMetrics/VictoriaTraces/app/vtstorage"
@@ -34,6 +35,8 @@ var (
 		"This limit affects Jaeger's /api/services API.")
 	traceMaxSpanNameList = flag.Uint64("search.traceMaxSpanNameList", 1000, "The maximum number of span name can return in a get span name request. "+
 		"This limit affects Jaeger's /api/services/*/operations API.")
+
+	latencyOffset = flag.Duration("search.latencyOffset", 30*time.Second, "The time when a trace become visible in query results after the collection. see -insert.traceMaxDuration as well. (default 30s)")
 )
 
 var (
@@ -164,7 +167,15 @@ func GetTrace(ctx context.Context, cp *CommonParams, traceID string) ([]*Row, er
 
 	// possible partition
 	// query: {trace_id_idx="xx"} AND trace_id:traceID
-	qStr := fmt.Sprintf(`{%s="%d"} AND %s:=%q | fields _time, %s, %s`, otelpb.TraceIDIndexStreamName, xxhash.Sum64String(traceID)%otelpb.TraceIDIndexPartitionCount, otelpb.TraceIDIndexFieldName, traceID, otelpb.TraceIDIndexStartTimeFieldName, otelpb.TraceIDIndexEndTimeFieldName)
+	qStr := fmt.Sprintf(
+		`{%s="%d"} AND %s:=%q | stats min(_time) _time, min(%s) %s, max(%s) %s`,
+		otelpb.TraceIDIndexStreamName,
+		xxhash.Sum64String(traceID)%otelpb.TraceIDIndexPartitionCount,
+		otelpb.TraceIDIndexFieldName,
+		traceID,
+		otelpb.TraceIDIndexStartTimeFieldName, otelpb.TraceIDIndexStartTimeFieldName,
+		otelpb.TraceIDIndexEndTimeFieldName, otelpb.TraceIDIndexEndTimeFieldName,
+	)
 	q, err := logstorage.ParseQueryAtTimestamp(qStr, currentTime.UnixNano())
 	if err != nil {
 		return nil, fmt.Errorf("cannot unmarshal query=%q: %w", qStr, err)
@@ -301,6 +312,12 @@ func getTraceIDList(ctx context.Context, cp *CommonParams, param *TraceQueryPara
 	}
 	q.AddPipeOffsetLimit(0, uint64(param.Limit))
 
+	// adjust the max start time, because fresh traces may not be completed.
+	// they should wait for *latencyOffset before being visible.
+	maxStartTime := time.Now().Add(-*latencyOffset)
+	if param.StartTimeMax.After(maxStartTime) {
+		param.StartTimeMax = maxStartTime
+	}
 	traceIDs, maxStartTime, err := findTraceIDsSplitTimeRange(ctx, q, cp, param.StartTimeMin, param.StartTimeMax, param.Limit)
 	if err != nil {
 		return nil, time.Time{}, err
@@ -395,43 +412,36 @@ func findTraceIDsSplitTimeRange(ctx context.Context, q *logstorage.Query, cp *Co
 }
 
 // findTraceIDTimeSplitTimeRange try to search from {trace_id_idx_stream="xx"} stream, which contains
-// the trace_id and the rough start time of this trace. It returns the start time of the trace if found.
+// the trace_id and start/end time of this trace. It returns the time range of the trace if found.
 //
-// If the span with this trace_id never reach VictoriaTraces, the search will to through the whole time range within
+// If the span with this trace_id never reach VictoriaTraces, the index search will go through the whole time range within
 // the retention period, and returns an ErrOutOfRetention.
 func findTraceIDTimeSplitTimeRange(ctx context.Context, q *logstorage.Query, cp *CommonParams) (time.Time, time.Time, error) {
 	var (
-		missingTimeColumn                      atomic.Bool
 		traceIDStartTimeStr, traceIDEndTimeStr string
 		// for compatible with old data
 		timeStr string
 	)
 
-	ctxWithCancel, cancel := context.WithCancel(ctx)
+	ctxWithCancel, _ := context.WithCancel(ctx)
 	cp.Query = q
 	qctx := cp.NewQueryContext(ctxWithCancel)
 	defer cp.UpdatePerQueryStatsMetrics()
 
 	writeBlock := func(_ uint, db *logstorage.DataBlock) {
-		if missingTimeColumn.Load() {
-			return
-		}
 		rowsCount := db.RowsCount()
 		if rowsCount == 0 {
 			return
+		}
+
+		if rowsCount > 1 {
+			logger.Errorf("BUG: unexpected rowCount during trace ID index search. query: %s", q.String())
 		}
 
 		columns := db.Columns
 		clonedColumnNames := make([]string, len(columns))
 		for i, c := range columns {
 			clonedColumnNames[i] = strings.Clone(c.Name)
-		}
-
-		_, ok := db.GetTimestamps(nil)
-		if !ok {
-			missingTimeColumn.Store(true)
-			cancel()
-			return
 		}
 
 		for _, c := range columns {
@@ -466,10 +476,6 @@ func findTraceIDTimeSplitTimeRange(ctx context.Context, q *logstorage.Query, cp 
 			return time.Time{}, time.Time{}, err
 		}
 
-		if missingTimeColumn.Load() {
-			return time.Time{}, time.Time{}, fmt.Errorf("missing _time column in the result for the query [%s]", qq)
-		}
-
 		// no hit in this time range, continue with step.
 		if timeStr == "" {
 			endTime = startTime
@@ -490,7 +496,7 @@ func findTraceIDTimeSplitTimeRange(ctx context.Context, q *logstorage.Query, cp 
 		traceIDStartTime, _ := strconv.ParseInt(traceIDStartTimeStr, 10, 64)
 		traceIDEndTime, _ := strconv.ParseInt(traceIDEndTimeStr, 10, 64)
 
-		return time.Unix(traceIDStartTime/1000000000, traceIDStartTime%1000000000), time.Unix(traceIDEndTime/1000000000, traceIDEndTime%1000000000), nil
+		return time.Unix(traceIDStartTime/int64(time.Second), traceIDStartTime%int64(time.Second)), time.Unix(traceIDEndTime/int64(time.Second), traceIDEndTime%int64(time.Second)), nil
 	}
 	return time.Time{}, time.Time{}, vtstoragecommon.ErrOutOfRetention
 }
