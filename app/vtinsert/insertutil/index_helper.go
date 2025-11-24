@@ -14,8 +14,8 @@ import (
 )
 
 var (
-	traceMaxDuration = flag.Duration("insert.traceMaxDuration", 30*time.Second, "Maximum duration for a trace. VictoriaTraces creates an index for each trace ID based on its start and end times."+
-		"Each trace ID must wait in the queue for -insert.traceMaxDuration, continuously updating its start and end times before being inserted into the index.")
+	traceMaxDuration = flag.Duration("insert.indexFlushInterval", 30*time.Second, "Amount of time after which the index of a trace is flushed. VictoriaTraces creates an index for each trace ID based on its start and end times."+
+		"Each trace ID must wait in the queue for -insert.indexFlushInterval, continuously updating its start and end times before being flushed into the index.")
 )
 
 type indexEntry struct {
