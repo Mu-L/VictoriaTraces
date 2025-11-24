@@ -423,7 +423,9 @@ func findTraceIDTimeSplitTimeRange(ctx context.Context, q *logstorage.Query, cp 
 		timeStr string
 	)
 
-	ctxWithCancel, _ := context.WithCancel(ctx)
+	ctxWithCancel, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	cp.Query = q
 	qctx := cp.NewQueryContext(ctxWithCancel)
 	defer cp.UpdatePerQueryStatsMetrics()
